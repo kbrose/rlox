@@ -1,0 +1,3 @@
+# array_width = 60
+max_width = 110
+use_small_heuristics = "Off"
