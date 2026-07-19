@@ -3,20 +3,12 @@ use std::{
     env,
     io::{self, Write as _},
 };
-use thiserror::Error;
 
+#[macro_use]
+mod define_ast;
+mod ast_printer;
+mod expr;
 mod scanner;
-
-#[derive(Error, Debug)]
-pub enum FormatError {
-    #[error("Invalid header (expected {expected:?}, got {found:?})")]
-    InvalidHeader {
-        expected: String,
-        found: String,
-    },
-    // #[error("Missing attribute: {0}")]
-    // MissingAttribute(String),
-}
 
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();
