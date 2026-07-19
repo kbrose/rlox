@@ -108,13 +108,16 @@ impl StateMachineError {
 }
 
 enum StateMachine {
-    TopLevel,
+    Root,
     Bang,
     Equal,
     Less,
     Greater,
     Slash,
-    InsideComment,
+    InsideSingleLineComment,
+    InsideBlockComment(usize),
+    InsideBlockCommentSawStar(usize),
+    InsideBlockCommentSawSlash(usize),
     InsideString(String),
     NumberStart(String),
     NumberWithDecimal(String),
@@ -125,20 +128,27 @@ type StateMachineResult = Result<([Option<TokenType>; 2], StateMachine), StateMa
 
 impl StateMachine {
     fn new() -> Self {
-        Self::TopLevel
+        Self::Root
     }
 
     fn process(self: Self, char: char) -> StateMachineResult {
         use StateMachine::*;
 
         match self {
-            TopLevel => Self::process_top_level(char).map(|(t, next_state)| ([t, None], next_state)),
+            Root => Self::process_top_level(char).map(|(t, next_state)| ([t, None], next_state)),
             Bang => Self::process_look_for_equal(char, TokenType::BangEqual, TokenType::Bang),
             Equal => Self::process_look_for_equal(char, TokenType::EqualEqual, TokenType::Equal),
             Less => Self::process_look_for_equal(char, TokenType::LessEqual, TokenType::Less),
             Greater => Self::process_look_for_equal(char, TokenType::GreaterEqual, TokenType::Greater),
             Slash => Self::process_slash(char),
-            InsideComment => Ok(([None, None], Self::process_comment(char))),
+            InsideSingleLineComment => Ok(([None, None], Self::process_line_comment(char))),
+            InsideBlockComment(n) => Ok(([None, None], Self::process_block_comment(char, n, false, false))),
+            InsideBlockCommentSawStar(n) => {
+                Ok(([None, None], Self::process_block_comment(char, n, true, false)))
+            }
+            InsideBlockCommentSawSlash(n) => {
+                Ok(([None, None], Self::process_block_comment(char, n, false, true)))
+            }
             InsideString(s) => Self::process_string(char, s),
             NumberStart(s) => Self::process_number(char, s, false),
             NumberWithDecimal(s) => Self::process_number(char, s, true),
@@ -149,16 +159,16 @@ impl StateMachine {
     fn process_top_level(char: char) -> Result<(Option<TokenType>, StateMachine), StateMachineError> {
         match char {
             // One character tokens
-            '(' => Ok((Some(TokenType::LeftParen), StateMachine::TopLevel)),
-            ')' => Ok((Some(TokenType::RightParen), StateMachine::TopLevel)),
-            '{' => Ok((Some(TokenType::LeftBrace), StateMachine::TopLevel)),
-            '}' => Ok((Some(TokenType::RightBrace), StateMachine::TopLevel)),
-            ',' => Ok((Some(TokenType::Comma), StateMachine::TopLevel)),
-            '.' => Ok((Some(TokenType::Dot), StateMachine::TopLevel)),
-            '-' => Ok((Some(TokenType::Minus), StateMachine::TopLevel)),
-            '+' => Ok((Some(TokenType::Plus), StateMachine::TopLevel)),
-            ';' => Ok((Some(TokenType::Semicolon), StateMachine::TopLevel)),
-            '*' => Ok((Some(TokenType::Star), StateMachine::TopLevel)),
+            '(' => Ok((Some(TokenType::LeftParen), StateMachine::Root)),
+            ')' => Ok((Some(TokenType::RightParen), StateMachine::Root)),
+            '{' => Ok((Some(TokenType::LeftBrace), StateMachine::Root)),
+            '}' => Ok((Some(TokenType::RightBrace), StateMachine::Root)),
+            ',' => Ok((Some(TokenType::Comma), StateMachine::Root)),
+            '.' => Ok((Some(TokenType::Dot), StateMachine::Root)),
+            '-' => Ok((Some(TokenType::Minus), StateMachine::Root)),
+            '+' => Ok((Some(TokenType::Plus), StateMachine::Root)),
+            ';' => Ok((Some(TokenType::Semicolon), StateMachine::Root)),
+            '*' => Ok((Some(TokenType::Star), StateMachine::Root)),
             // Tokens that may match the next equals
             '!' => Ok((None, StateMachine::Bang)),
             '=' => Ok((None, StateMachine::Equal)),
@@ -167,7 +177,7 @@ impl StateMachine {
             // May be a comment
             '/' => Ok((None, StateMachine::Slash)),
             // Whitespace
-            ' ' | '\r' | '\t' | '\n' => Ok((None, StateMachine::TopLevel)),
+            ' ' | '\r' | '\t' | '\n' => Ok((None, StateMachine::Root)),
             // String literals
             '"' => Ok((None, StateMachine::InsideString(String::new()))),
             // Number literals
@@ -183,7 +193,7 @@ impl StateMachine {
 
     fn process_look_for_equal(char: char, if_equal: TokenType, otherwise: TokenType) -> StateMachineResult {
         if char == '=' {
-            Ok(([Some(if_equal), None], StateMachine::TopLevel))
+            Ok(([Some(if_equal), None], StateMachine::Root))
         } else {
             let (maybe_token, next_state) = Self::process_top_level(char)?;
             Ok(([Some(otherwise), maybe_token], next_state))
@@ -191,26 +201,51 @@ impl StateMachine {
     }
 
     fn process_slash(char: char) -> StateMachineResult {
-        if char == '/' {
-            Ok(([None, None], StateMachine::InsideComment))
-        } else {
-            let (maybe_token, next_state) = Self::process_top_level(char)?;
-            Ok(([Some(TokenType::Slash), maybe_token], next_state))
+        match char {
+            '/' => Ok(([None, None], StateMachine::InsideSingleLineComment)),
+            '*' => Ok(([None, None], StateMachine::InsideBlockComment(0))),
+            _ => {
+                let (maybe_token, next_state) = Self::process_top_level(char)?;
+                Ok(([Some(TokenType::Slash), maybe_token], next_state))
+            }
         }
     }
 
-    fn process_comment(char: char) -> StateMachine {
+    fn process_line_comment(char: char) -> StateMachine {
         if char == '\n' {
-            StateMachine::TopLevel
+            StateMachine::Root
         } else {
-            StateMachine::InsideComment
+            StateMachine::InsideSingleLineComment
+        }
+    }
+
+    fn process_block_comment(
+        char: char,
+        nesting_level: usize,
+        saw_star: bool,
+        saw_slash: bool,
+    ) -> StateMachine {
+        if saw_star && char == '/' {
+            if nesting_level > 0 {
+                StateMachine::InsideBlockComment(nesting_level - 1)
+            } else {
+                StateMachine::Root
+            }
+        } else if saw_slash && char == '*' {
+            StateMachine::InsideBlockComment(nesting_level + 1)
+        } else if char == '*' {
+            StateMachine::InsideBlockCommentSawStar(nesting_level)
+        } else if char == '/' {
+            StateMachine::InsideBlockCommentSawSlash(nesting_level)
+        } else {
+            StateMachine::InsideBlockComment(nesting_level)
         }
     }
 
     fn process_string(char: char, mut s: String) -> StateMachineResult {
         if char == '"' {
             s.shrink_to_fit();
-            Ok(([Some(TokenType::String(s)), None], StateMachine::TopLevel))
+            Ok(([Some(TokenType::String(s)), None], StateMachine::Root))
         } else {
             s.push(char);
             Ok(([None, None], StateMachine::InsideString(s)))
@@ -283,13 +318,16 @@ impl StateMachine {
     fn terminate_scanning(self: Self) -> (Option<TokenType>, Option<StateMachineError>) {
         match self {
             // It's "ok" to end scanning in these states. (Most will cause issues downstream.)
-            StateMachine::TopLevel => (None, None),
-            StateMachine::Bang => (None, None),
-            StateMachine::Equal => (None, None),
-            StateMachine::Less => (None, None),
-            StateMachine::Greater => (None, None),
-            StateMachine::Slash => (None, None),
-            StateMachine::InsideComment => (None, None),
+            StateMachine::Root
+            | StateMachine::Bang
+            | StateMachine::Equal
+            | StateMachine::Less
+            | StateMachine::Greater
+            | StateMachine::Slash
+            | StateMachine::InsideSingleLineComment
+            | StateMachine::InsideBlockComment(_)
+            | StateMachine::InsideBlockCommentSawStar(_)
+            | StateMachine::InsideBlockCommentSawSlash(_) => (None, None),
             // Ending scanning in these states requires some final clean up
             Self::NumberStart(s) => match Self::process_number(' ', s, false) {
                 Ok(([first, second], _)) => {
@@ -387,13 +425,17 @@ mod tests {
 
     /// Converts list of token types into list of tokens, assuming they all
     /// exist on line 1. Also appends an EOF token to the end.
-    fn one_line_vec(token_types: Vec<TokenType>) -> Vec<Token> {
+    fn one_liner(token_types: Vec<TokenType>) -> Vec<Token> {
+        one_liner_on_line(token_types, 1)
+    }
+
+    fn one_liner_on_line(token_types: Vec<TokenType>, line: usize) -> Vec<Token> {
         token_types
             .into_iter()
             .chain(vec![TokenType::Eof])
             .map(|token_type| Token {
                 token_type,
-                line: 1,
+                line,
             })
             .collect()
     }
@@ -409,23 +451,23 @@ mod tests {
     fn test_keywords() {
         for (key, val) in KEYWORD_MAP.iter() {
             let tokens = scan_tokens(&format!("({key})")).unwrap();
-            assert_eq!(tokens, one_line_vec(vec![TokenType::LeftParen, val.clone(), TokenType::RightParen]));
+            assert_eq!(tokens, one_liner(vec![TokenType::LeftParen, val.clone(), TokenType::RightParen]));
         }
     }
 
     #[test]
     fn test_identifier() {
         let tokens = scan_tokens("a ").unwrap();
-        assert_eq!(tokens, one_line_vec(vec![TokenType::Identifier("a".to_string())]));
+        assert_eq!(tokens, one_liner(vec![TokenType::Identifier("a".to_string())]));
 
         let tokens = scan_tokens("a").unwrap();
-        assert_eq!(tokens, one_line_vec(vec![TokenType::Identifier("a".to_string())]));
+        assert_eq!(tokens, one_liner(vec![TokenType::Identifier("a".to_string())]));
 
         let tokens = scan_tokens("a5").unwrap();
-        assert_eq!(tokens, one_line_vec(vec![TokenType::Identifier("a5".to_string())]));
+        assert_eq!(tokens, one_liner(vec![TokenType::Identifier("a5".to_string())]));
 
         let tokens = scan_tokens("_az_AZ_09_").unwrap();
-        assert_eq!(tokens, one_line_vec(vec![TokenType::Identifier("_az_AZ_09_".to_string())]));
+        assert_eq!(tokens, one_liner(vec![TokenType::Identifier("_az_AZ_09_".to_string())]));
     }
 
     #[test]
@@ -433,14 +475,14 @@ mod tests {
         let tokens = scan_tokens("123 456 0.5 ").unwrap();
         assert_eq!(
             tokens,
-            one_line_vec(vec![TokenType::Number(123.0), TokenType::Number(456.0), TokenType::Number(0.5)])
+            one_liner(vec![TokenType::Number(123.0), TokenType::Number(456.0), TokenType::Number(0.5)])
         )
     }
 
     #[test]
     fn test_number_at_eof() {
         let tokens = scan_tokens("9").unwrap();
-        assert_eq!(tokens, one_line_vec(vec![TokenType::Number(9.0)]))
+        assert_eq!(tokens, one_liner(vec![TokenType::Number(9.0)]))
     }
 
     #[test]
@@ -449,7 +491,7 @@ mod tests {
 
         assert_eq!(
             tokens,
-            one_line_vec(vec![
+            one_liner(vec![
                 TokenType::String("Hello, World!".to_string()),
                 TokenType::LeftParen,
                 TokenType::RightParen
@@ -458,10 +500,40 @@ mod tests {
     }
 
     #[test]
+    fn test_line_comment() {
+        assert_eq!(scan_tokens("// 1234").unwrap(), one_liner(vec![]));
+    }
+
+    #[test]
+    fn test_line_comment_2() {
+        assert_eq!(scan_tokens("// 1234\n(").unwrap(), one_liner_on_line(vec![TokenType::LeftParen], 2));
+    }
+
+    #[test]
+    fn test_block_comments() {
+        assert_eq!(scan_tokens("/* 1234").unwrap(), one_liner(vec![]));
+        assert_eq!(scan_tokens("/* 1234 */").unwrap(), one_liner(vec![]));
+
+        assert_eq!(
+            scan_tokens("(/* 1234 */)").unwrap(),
+            one_liner(vec![TokenType::LeftParen, TokenType::RightParen])
+        );
+    }
+
+    #[test]
+    fn test_block_comments_nesting() {
+        assert_eq!(scan_tokens("/* /* 1234 */ 5678").unwrap(), one_liner(vec![]));
+        assert_eq!(
+            scan_tokens("(/* /* 1234 */ 5678 */)").unwrap(),
+            one_liner(vec![TokenType::LeftParen, TokenType::RightParen])
+        );
+    }
+
+    #[test]
     fn test_scan_simple() {
         let tokens = scan_tokens("(").unwrap();
 
-        assert_eq!(tokens, one_line_vec(vec![TokenType::LeftParen]));
+        assert_eq!(tokens, one_liner(vec![TokenType::LeftParen]));
     }
 
     #[test]
