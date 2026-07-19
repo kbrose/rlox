@@ -41,7 +41,6 @@ pub(crate) enum TokenType {
     LessEqual,
 
     //Literals.
-    // TODO: Add values here
     Identifier(String),
     String(String),
     Number(f64),
@@ -291,13 +290,7 @@ impl StateMachine {
             StateMachine::Greater => (None, None),
             StateMachine::Slash => (None, None),
             StateMachine::InsideComment => (None, None),
-            // It's a scanning error to end scanning in these states.
-            StateMachine::InsideString(_) => (
-                None,
-                Some(StateMachineError {
-                    message: "Unterminated string.".to_string(),
-                }),
-            ),
+            // Ending scanning in these states requires some final clean up
             Self::NumberStart(s) => match Self::process_number(' ', s, false) {
                 Ok(([first, second], _)) => {
                     debug_assert!(second.is_none());
@@ -319,17 +312,21 @@ impl StateMachine {
                 }
                 Err(e) => (None, Some(e)),
             },
+            // It's a scanning error to end scanning in these states.
+            StateMachine::InsideString(_) => (
+                None,
+                Some(StateMachineError {
+                    message: "Unterminated string.".to_string(),
+                }),
+            ),
         }
     }
 }
 
 pub(crate) fn scan_tokens(source: &str) -> Result<Vec<Token>> {
-    let mut tokens = vec![];
-
     let mut character_scanning_state = StateMachine::new();
-
+    let mut tokens = vec![];
     let mut errors = vec![];
-
     let mut line = 1;
 
     for char in source.chars() {
@@ -403,7 +400,9 @@ mod tests {
 
     #[test]
     fn test_error() {
-        let _ = scan_tokens("%").expect_err("Failed to error while scanning invalid source");
+        scan_tokens("%").expect_err("Failed to error while scanning invalid source");
+        scan_tokens("asdf%").expect_err("Failed to error while scanning invalid source");
+        scan_tokens("1234%").expect_err("Failed to error while scanning invalid source");
     }
 
     #[test]
