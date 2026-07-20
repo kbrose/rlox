@@ -14,6 +14,12 @@ macro_rules! define_ast {
             pub(crate) struct $struct_name {
                 $( pub(crate) $field_name: $field_type, )+
             }
+
+            impl $struct_name {
+                pub(crate) fn to_expr( $($field_name: $field_type, )+ ) -> Expr {
+                    Expr::$struct_name(Box::new($struct_name{ $($field_name, )+ }))
+                }
+            }
         )*
 
         // Generate the wrapping enum

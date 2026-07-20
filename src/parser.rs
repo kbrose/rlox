@@ -153,11 +153,7 @@ impl Parser {
         while self.matches_token(&targets) {
             let operator = self.previous().expect("Empty previous even after advancing?").clone();
             let right = next_higher_precedence(self)?;
-            expr = Expr::Binary(Box::new(Binary {
-                left: expr,
-                operator,
-                right,
-            }))
+            expr = Binary::to_expr(expr, operator, right)
         }
 
         Ok(expr)
@@ -190,10 +186,7 @@ impl Parser {
         if self.matches_token(&[TokenType::Bang, TokenType::Minus]) {
             let operator = self.previous().expect("Empty previous even after advancing?").clone();
             let expression = self.unary()?;
-            Ok(Expr::Unary(Box::new(Unary {
-                operator,
-                expression,
-            })))
+            Ok(Unary::to_expr(operator, expression))
         } else {
             self.primary()
         }
@@ -201,29 +194,21 @@ impl Parser {
 
     fn primary(&mut self) -> Result<Expr> {
         if self.matches_token(&[TokenType::False]) {
-            Ok(Expr::Literal(Box::new(Literal {
-                value: TokenType::False,
-            })))
+            Ok(Literal::to_expr(TokenType::False))
         } else if self.matches_token(&[TokenType::True]) {
-            Ok(Expr::Literal(Box::new(Literal {
-                value: TokenType::True,
-            })))
+            Ok(Literal::to_expr(TokenType::True))
         } else if self.matches_token(&[TokenType::Nil]) {
-            Ok(Expr::Literal(Box::new(Literal {
-                value: TokenType::Nil,
-            })))
+            Ok(Literal::to_expr(TokenType::Nil))
         } else if self.matches_token(&[TokenType::Number(0.0), TokenType::String(String::new())]) {
             // Note the 0.0 and String::new() values don't matter.
             // See implementation of matches_token for more.
-            Ok(Expr::Literal(Box::new(Literal {
-                value: self.previous().expect("Empty previous even after advancing?").token_type.clone(),
-            })))
+            Ok(Literal::to_expr(
+                self.previous().expect("Empty previous even after advancing?").token_type.clone(),
+            ))
         } else if self.matches_token(&[TokenType::LeftParen]) {
             let expression = self.expression()?;
             self.consume(TokenType::RightParen, "Expect ')' after expression.")?;
-            Ok(Expr::Grouping(Box::new(Grouping {
-                expression,
-            })))
+            Ok(Grouping::to_expr(expression))
         } else {
             Err(anyhow!("{}", self.error(self.peek(), "Expected expresion.")))
         }
@@ -251,39 +236,38 @@ mod tests {
         Box::new(t)
     }
 
+    fn literal_num(n: f64) -> Expr {
+        Expr::Literal(b(Literal {
+            value: TokenType::Number(n),
+        }))
+    }
+
+    fn literal_str(s: &str) -> Expr {
+        Expr::Literal(b(Literal {
+            value: TokenType::String(s.to_string()),
+        }))
+    }
+
     #[test]
     fn test_parse_simple() {
         assert_eq!(
             parse(scan_tokens(&"123").expect("Error scanning")).expect("Error parsing"),
-            Expr::Literal(Box::new(Literal {
-                value: TokenType::Number(123.0)
-            }))
+            literal_num(123.0)
         );
 
         assert_eq!(
             parse(scan_tokens(&"\"123\"").expect("Error scanning")).expect("Error parsing"),
-            Expr::Literal(Box::new(Literal {
-                value: TokenType::String("123".to_string())
-            }))
+            literal_str("123")
         );
     }
 
     #[test]
     fn test_parse_complex() {
-        let expected: Expr = Expr::Binary(b(Binary {
-            left: Expr::Unary(b(Unary {
-                operator: make_token(TokenType::Minus),
-                expression: Expr::Literal(b(Literal {
-                    value: TokenType::Number(123.0),
-                })),
-            })),
-            operator: make_token(TokenType::Star),
-            right: Expr::Grouping(b(Grouping {
-                expression: Expr::Literal(b(Literal {
-                    value: TokenType::Number(45.67),
-                })),
-            })),
-        }));
+        let expected: Expr = Binary::to_expr(
+            Unary::to_expr(make_token(TokenType::Minus), literal_num(123.0)),
+            make_token(TokenType::Star),
+            Grouping::to_expr(literal_num(45.67)),
+        );
 
         assert_eq!(
             parse(scan_tokens(&"-123 * (45.67)").expect("Error scanning")).expect("Error parsing"),
@@ -302,20 +286,11 @@ mod tests {
             expected
         );
 
-        let expected: Expr = Expr::Binary(b(Binary {
-            left: Expr::Unary(b(Unary {
-                operator: make_token(TokenType::Minus),
-                expression: Expr::Literal(b(Literal {
-                    value: TokenType::Number(123.0),
-                })),
-            })),
-            operator: make_token(TokenType::EqualEqual),
-            right: Expr::Grouping(b(Grouping {
-                expression: Expr::Literal(b(Literal {
-                    value: TokenType::Number(45.67),
-                })),
-            })),
-        }));
+        let expected = Binary::to_expr(
+            Unary::to_expr(make_token(TokenType::Minus), literal_num(123.0)),
+            make_token(TokenType::EqualEqual),
+            Grouping::to_expr(literal_num(45.67)),
+        );
 
         assert_eq!(
             parse(scan_tokens(&"-123 == (45.67)").expect("Error scanning")).expect("Error parsing"),
