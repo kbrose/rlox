@@ -8,6 +8,7 @@ use std::{
 mod define_ast;
 mod ast_printer;
 mod expr;
+mod parser;
 mod scanner;
 
 fn main() -> Result<()> {
@@ -15,7 +16,7 @@ fn main() -> Result<()> {
     if args.len() > 1 {
         Err(anyhow!("Usage: rlox [script]"))
     } else if args.len() == 1 {
-        run_file(&args[0])
+        run_file(&args[0]).map_err(|_| anyhow!("See above."))
     } else {
         run_prompt()
     }
@@ -40,21 +41,19 @@ fn run_prompt() -> Result<()> {
             println!("\nFin.");
             break Ok(());
         }
-        match run(&buffer) {
-            Ok(()) => {}
-            Err(e) => {
-                println!("{e:?}");
-            }
-        }
+        let _ = run(&buffer); // Errors should have already been printed.
         buffer.clear(); // clear contents but keep allocated size
     }
 }
 
 fn run(source: &str) -> Result<()> {
     let tokens = scanner::scan_tokens(source)?;
+    let expression = parser::parse(tokens)?;
 
-    for token in tokens {
-        println!("{token:?}");
-    }
+    println!("{}", ast_printer::pretty_print_expr(&expression));
+
+    // for token in tokens {
+    //     println!("{token:?}");
+    // }
     Ok(())
 }

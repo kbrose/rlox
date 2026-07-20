@@ -7,7 +7,7 @@ pub(crate) fn pretty_print_expr(expr: &Expr) -> String {
             format!(
                 "({} {} {})",
                 pretty_print_expr(&binary.left),
-                binary.operator.pretty_print(),
+                binary.operator.token_type.pretty_print(),
                 pretty_print_expr(&binary.right)
             )
         }
@@ -16,7 +16,7 @@ pub(crate) fn pretty_print_expr(expr: &Expr) -> String {
         }
         Expr::Literal(literal) => literal.value.pretty_print(),
         Expr::Unary(unary) => {
-            format!("({} {})", unary.operator.pretty_print(), pretty_print_expr(&unary.expression))
+            format!("({} {})", unary.operator.token_type.pretty_print(), pretty_print_expr(&unary.expression))
         }
     }
 }
@@ -29,7 +29,7 @@ mod tests {
 
     fn make_token(token_type: TokenType) -> Token {
         Token {
-            line: 0,
+            line: 1,
             token_type,
         }
     }
@@ -44,13 +44,13 @@ mod tests {
             left: Expr::Unary(b(Unary {
                 operator: make_token(TokenType::Minus),
                 expression: Expr::Literal(b(Literal {
-                    value: make_token(TokenType::Number(123.0)),
+                    value: TokenType::Number(123.0),
                 })),
             })),
             operator: make_token(TokenType::Star),
             right: Expr::Grouping(b(Grouping {
                 expression: Expr::Literal(b(Literal {
-                    value: make_token(TokenType::Number(45.67)),
+                    value: TokenType::Number(45.67),
                 })),
             })),
         }));

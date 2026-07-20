@@ -11,7 +11,7 @@ struct ScanError {
 
 impl fmt::Display for ScanError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[Syntax Error line {}] {}", self.line, self.message)
+        write!(f, "[Scan Error line: {}] {}", self.line, self.message)
     }
 }
 
@@ -67,36 +67,9 @@ pub(crate) enum TokenType {
     Eof,
 }
 
-static KEYWORD_MAP: LazyLock<HashMap<&'static str, TokenType>> = LazyLock::new(|| {
-    HashMap::from([
-        ("and", TokenType::And),
-        ("class", TokenType::Class),
-        ("else", TokenType::Else),
-        ("false", TokenType::False),
-        ("for", TokenType::For),
-        ("fun", TokenType::Fun),
-        ("if", TokenType::If),
-        ("nil", TokenType::Nil),
-        ("or", TokenType::Or),
-        ("print", TokenType::Print),
-        ("return", TokenType::Return),
-        ("super", TokenType::Super),
-        ("this", TokenType::This),
-        ("true", TokenType::True),
-        ("var", TokenType::Var),
-        ("while", TokenType::While),
-    ])
-});
-
-#[derive(Debug, PartialEq)]
-pub(crate) struct Token {
-    pub(crate) token_type: TokenType,
-    pub(crate) line: usize,
-}
-
-impl Token {
+impl TokenType {
     pub(crate) fn pretty_print(self: &Self) -> String {
-        match &self.token_type {
+        match &self {
             TokenType::LeftParen => "(".to_string(),
             TokenType::RightParen => ")".to_string(),
             TokenType::LeftBrace => "{".to_string(),
@@ -138,6 +111,33 @@ impl Token {
             TokenType::Eof => "<EOF>".to_string(),
         }
     }
+}
+
+static KEYWORD_MAP: LazyLock<HashMap<&'static str, TokenType>> = LazyLock::new(|| {
+    HashMap::from([
+        ("and", TokenType::And),
+        ("class", TokenType::Class),
+        ("else", TokenType::Else),
+        ("false", TokenType::False),
+        ("for", TokenType::For),
+        ("fun", TokenType::Fun),
+        ("if", TokenType::If),
+        ("nil", TokenType::Nil),
+        ("or", TokenType::Or),
+        ("print", TokenType::Print),
+        ("return", TokenType::Return),
+        ("super", TokenType::Super),
+        ("this", TokenType::This),
+        ("true", TokenType::True),
+        ("var", TokenType::Var),
+        ("while", TokenType::While),
+    ])
+});
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct Token {
+    pub(crate) token_type: TokenType,
+    pub(crate) line: usize,
 }
 
 struct StateMachineError {
