@@ -5,7 +5,8 @@ use crate::{
 use anyhow::{Result, anyhow};
 use std::fmt;
 
-// expression     → equality ;
+// expression     → comma ;
+// comma          → equality ( "," equality )* ;
 // equality       → comparison ( ( "!=" | "==" ) comparison )* ;
 // comparison     → term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
 // term           → factor ( ( "-" | "+" ) factor )* ;
@@ -160,7 +161,11 @@ impl Parser {
     }
 
     fn expression(&mut self) -> Result<Expr> {
-        self.equality()
+        self.comma()
+    }
+
+    fn comma(&mut self) -> Result<Expr> {
+        self.left_associative_binary_op(&[TokenType::Comma], Self::equality)
     }
 
     fn equality(&mut self) -> Result<Expr> {
@@ -259,6 +264,14 @@ mod tests {
             parse(scan_tokens(&"\"123\"").expect("Error scanning")).expect("Error parsing"),
             literal_str("123")
         );
+    }
+
+    #[test]
+    fn test_comma() {
+        assert_eq!(
+            parse(scan_tokens(&"1, 2").expect("Error scanning.")).expect("Error parsing."),
+            Binary::to_expr(literal_num(1.0), make_token(TokenType::Comma), literal_num(2.0))
+        )
     }
 
     #[test]
