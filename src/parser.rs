@@ -168,10 +168,7 @@ impl Parser {
     }
 
     fn equality(&mut self) -> Result<Expr> {
-        self.left_associative_binary_op(&[TokenType::Bang, TokenType::BangEqual], Self::comparison)
-        // self.left_associative_binary_op(&[TokenType::Bang, TokenType::BangEqual], |parser| {
-        //     parser.comparison()
-        // })
+        self.left_associative_binary_op(&[TokenType::BangEqual, TokenType::EqualEqual], Self::comparison)
     }
 
     fn comparison(&mut self) -> Result<Expr> {
@@ -302,6 +299,26 @@ mod tests {
         assert_eq!(
             parse(scan_tokens(&"-123 /* comment */ * (45.67)  //").expect("Error scanning"))
                 .expect("Error parsing"),
+            expected
+        );
+
+        let expected: Expr = Expr::Binary(b(Binary {
+            left: Expr::Unary(b(Unary {
+                operator: make_token(TokenType::Minus),
+                expression: Expr::Literal(b(Literal {
+                    value: TokenType::Number(123.0),
+                })),
+            })),
+            operator: make_token(TokenType::EqualEqual),
+            right: Expr::Grouping(b(Grouping {
+                expression: Expr::Literal(b(Literal {
+                    value: TokenType::Number(45.67),
+                })),
+            })),
+        }));
+
+        assert_eq!(
+            parse(scan_tokens(&"-123 == (45.67)").expect("Error scanning")).expect("Error parsing"),
             expected
         );
     }

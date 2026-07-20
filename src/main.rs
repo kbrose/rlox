@@ -32,13 +32,14 @@ fn run_file(path: &String) -> Result<()> {
 
 fn run_prompt() -> Result<()> {
     let mut buffer = String::new();
-    let stdin = io::stdin(); // We get `Stdin` here.
+    let stdin = io::stdin();
+    println!("Welcome to rlox! Press Ctrl-D to exit.");
     loop {
         print!("> ");
         std::io::stdout().flush()?;
         // Check for ctrl-d
         if stdin.read_line(&mut buffer)? == 0 {
-            println!("\nFin.");
+            println!("");
             break Ok(());
         }
         let _ = run(&buffer); // Errors should have already been printed.
