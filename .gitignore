@@ -1,1 +1,3 @@
 /target
+/.zed
+lox/bench.lox

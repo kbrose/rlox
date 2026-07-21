@@ -237,20 +237,12 @@ mod tests {
         }
     }
 
-    fn b<T>(t: T) -> Box<T> {
-        Box::new(t)
-    }
-
     fn literal_num(n: f64) -> Expr {
-        Expr::Literal(b(Literal {
-            value: TokenType::Number(n),
-        }))
+        Literal::to_expr(TokenType::Number(n))
     }
 
     fn literal_str(s: &str) -> Expr {
-        Expr::Literal(b(Literal {
-            value: TokenType::String(s.to_string()),
-        }))
+        Literal::to_expr(TokenType::String(s.to_string()))
     }
 
     #[test]

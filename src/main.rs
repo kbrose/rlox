@@ -53,13 +53,37 @@ fn run_prompt() -> Result<()> {
 }
 
 fn run(source: &str) -> Result<()> {
+    #[cfg(feature = "timings")]
+    let scanning_timer = Instant::now();
+
     let tokens = scanner::scan_tokens(source)?;
+
+    #[cfg(feature = "timings")]
+    let parsing_timer = {
+        println!("Scanning: {:?}", scanning_timer.elapsed());
+        Instant::now()
+    };
+
     let expression = parser::parse(tokens)?;
 
-    println!("{}", ast_printer::pretty_print_expr(&expression));
+    #[cfg(feature = "timings")]
+    println!("Parsing : {:?}", parsing_timer.elapsed());
 
-    // for token in tokens {
-    //     println!("{token:?}");
-    // }
+    match expression {
+        expr::Expr::Binary(_) => {
+            println!("Root node is Binary");
+        }
+        expr::Expr::Grouping(_) => {
+            println!("Root node is Grouping");
+        }
+        expr::Expr::Literal(_) => {
+            println!("Root node is Literal");
+        }
+        expr::Expr::Unary(_) => {
+            println!("Root node is Unary");
+        }
+    }
+    // println!("{}", ast_printer::pretty_print_expr(&expression));
+
     Ok(())
 }
