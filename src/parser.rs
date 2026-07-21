@@ -16,9 +16,12 @@ use std::fmt;
 // primary        → NUMBER | STRING | "true" | "false" | "nil"
 //                | "(" expression ")" ;
 
+type EResult = Result<Expr>;
+
 struct Parser {
     tokens: Vec<Token>,
     current: usize,
+    parse_error: bool,
 }
 
 #[derive(Debug)]
@@ -44,10 +47,26 @@ impl Parser {
         Parser {
             tokens,
             current: 0,
+            parse_error: false,
         }
     }
 
-    fn parse(&mut self) -> Result<Expr> {
+    fn parse(&mut self) -> EResult {
+        let result = self.expression();
+        match result {
+            Ok(expr) => {
+                if self.parse_error {
+                    Err(anyhow!("Parsing error (recoverable)."))
+                } else {
+                    Ok(expr)
+                }
+            }
+            Err(_) => result,
+        }
+    }
+
+    #[cfg(test)]
+    fn parse_unchecked(&mut self) -> EResult {
         self.expression()
     }
 
@@ -99,7 +118,7 @@ impl Parser {
         if self.check(&expected) {
             Ok(self.advance())
         } else {
-            Err(anyhow!("{}", self.error(self.peek(), message)))
+            Err(anyhow!("{}", self.error(self.peek().clone(), message)))
         }
     }
 
@@ -132,62 +151,69 @@ impl Parser {
         }
     }
 
-    fn error(&self, cause: &Token, message: &str) -> ParserError {
+    fn error(&mut self, cause: Token, message: &str) -> ParserError {
+        self.parse_error = true;
         let error = ParserError {
-            token: cause.clone(),
+            token: cause,
             message: message.to_string(),
         };
         eprintln!("{}", error);
         error
     }
 
-    fn left_associative_binary_op<F>(
-        &mut self,
-        targets: &[TokenType],
-        mut next_higher_precedence: F,
-    ) -> Result<Expr>
+    fn binary_op_missing_lhs_error_production<F>(&mut self, mut next_grammar: F) -> EResult
     where
-        F: FnMut(&mut Self) -> Result<Expr>,
+        F: FnMut(&mut Self) -> EResult,
     {
-        let mut expr = next_higher_precedence(self)?;
+        self.error(self.peek().clone(), "Expected expression, found binary operator");
+        // Throwaway the extra RHS. Forward the hard error if there was one.
+        let _ = next_grammar(self)?;
+        self.expression() // Restart at the bottom of the hierarchy.
+    }
+
+    fn left_associative_binary_op<F>(&mut self, targets: &[TokenType], mut next_grammar: F) -> EResult
+    where
+        F: FnMut(&mut Self) -> EResult,
+    {
+        let mut expr = next_grammar(self)?;
 
         while self.matches_token(targets) {
             let operator = self.previous().expect("Empty previous even after advancing?").clone();
-            let right = next_higher_precedence(self)?;
+            let right = next_grammar(self)?;
             expr = Binary::to_expr(expr, operator, right)
         }
 
         Ok(expr)
     }
 
-    fn expression(&mut self) -> Result<Expr> {
+    fn expression(&mut self) -> EResult {
         self.comma()
     }
 
-    fn comma(&mut self) -> Result<Expr> {
+    fn comma(&mut self) -> EResult {
         self.left_associative_binary_op(&[TokenType::Comma], Self::equality)
     }
 
-    fn equality(&mut self) -> Result<Expr> {
+    fn equality(&mut self) -> EResult {
         self.left_associative_binary_op(&[TokenType::BangEqual, TokenType::EqualEqual], Self::comparison)
     }
 
-    fn comparison(&mut self) -> Result<Expr> {
+    fn comparison(&mut self) -> EResult {
         self.left_associative_binary_op(
             &[TokenType::Greater, TokenType::GreaterEqual, TokenType::Less, TokenType::LessEqual],
             Self::term,
         )
     }
 
-    fn term(&mut self) -> Result<Expr> {
+    fn term(&mut self) -> EResult {
         self.left_associative_binary_op(&[TokenType::Minus, TokenType::Plus], Self::factor)
     }
 
-    fn factor(&mut self) -> Result<Expr> {
+    fn factor(&mut self) -> EResult {
         self.left_associative_binary_op(&[TokenType::Slash, TokenType::Star], Self::unary)
     }
 
-    fn unary(&mut self) -> Result<Expr> {
+    fn unary(&mut self) -> EResult {
         if self.matches_token(&[TokenType::Bang, TokenType::Minus]) {
             let operator = self.previous().expect("Empty previous even after advancing?").clone();
             let expression = self.unary()?;
@@ -197,7 +223,9 @@ impl Parser {
         }
     }
 
-    fn primary(&mut self) -> Result<Expr> {
+    fn primary(&mut self) -> EResult {
+        // let mut binary_op_error_production = ||
+
         if self.matches_token(&[TokenType::False]) {
             Ok(Literal::to_expr(TokenType::False))
         } else if self.matches_token(&[TokenType::True]) {
@@ -214,13 +242,28 @@ impl Parser {
             let expression = self.expression()?;
             self.consume(TokenType::RightParen, "Expect ')' after expression.")?;
             Ok(Grouping::to_expr(expression))
+        } else if self.matches_token(&[TokenType::Comma]) {
+            self.binary_op_missing_lhs_error_production(Self::equality)
+        } else if self.matches_token(&[TokenType::EqualEqual, TokenType::BangEqual]) {
+            self.binary_op_missing_lhs_error_production(Self::comparison)
+        } else if self.matches_token(&[
+            TokenType::Greater,
+            TokenType::GreaterEqual,
+            TokenType::Less,
+            TokenType::LessEqual,
+        ]) {
+            self.binary_op_missing_lhs_error_production(Self::term)
+        } else if self.matches_token(&[TokenType::Plus]) {
+            self.binary_op_missing_lhs_error_production(Self::factor)
+        } else if self.matches_token(&[TokenType::Slash, TokenType::Star]) {
+            self.binary_op_missing_lhs_error_production(Self::unary)
         } else {
-            Err(anyhow!("{}", self.error(self.peek(), "Expected expresion.")))
+            Err(anyhow!("{}", self.error(self.peek().clone(), "Expected expresion.")))
         }
     }
 }
 
-pub(crate) fn parse(tokens: Vec<Token>) -> Result<Expr> {
+pub(crate) fn parse(tokens: Vec<Token>) -> EResult {
     let mut parser = Parser::new(tokens);
     parser.parse()
 }
@@ -307,5 +350,15 @@ mod tests {
     fn test_parse_errors() {
         assert!(parse(scan_tokens(&"+123").expect("Error scanning")).is_err());
         assert!(parse(scan_tokens(&"class").expect("Error scanning")).is_err());
+    }
+
+    #[test]
+    fn test_parse_recoverable_errors() {
+        for op in [",", "!=", "==", ">", ">=", "<", "<=", "+", "/", "*"] {
+            let tokens = scan_tokens(&format!("{}123 5", op)).expect("Error scanning");
+            let mut parser = Parser::new(tokens);
+            let expr = parser.parse_unchecked().expect("Parsing had hard fail, expected recoverable.");
+            assert_eq!(expr, Literal::to_expr(TokenType::Number(5.0)));
+        }
     }
 }
