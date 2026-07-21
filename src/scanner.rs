@@ -300,7 +300,7 @@ impl StateMachine {
 
     fn process_number(char: char, mut s: String, has_seen_decimal: bool) -> StateMachineResult {
         match char {
-            '0'..'9' => {
+            '0'..='9' => {
                 s.push(char);
                 Ok((
                     [None, None],

@@ -151,7 +151,7 @@ impl Parser {
     {
         let mut expr = next_higher_precedence(self)?;
 
-        while self.matches_token(&targets) {
+        while self.matches_token(targets) {
             let operator = self.previous().expect("Empty previous even after advancing?").clone();
             let right = next_higher_precedence(self)?;
             expr = Binary::to_expr(expr, operator, right)

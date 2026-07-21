@@ -1,4 +1,6 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
+#[cfg(feature = "timings")]
+use std::time::Instant;
 use std::{
     env,
     io::{self, Write as _},
@@ -23,7 +25,10 @@ fn main() -> Result<()> {
 }
 
 fn run_file(path: &String) -> Result<()> {
-    let input = std::fs::read_to_string(path).with_context(|| format!("Failed to read file {}", path))?;
+    let input = std::fs::read_to_string(path).map_err(|_| {
+        eprintln!("Failed to read file {}", path);
+        anyhow!("")
+    })?;
 
     run(&input)?;
 
