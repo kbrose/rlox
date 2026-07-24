@@ -142,7 +142,12 @@ fn interpret(expr: &Expr) -> Result<LoxValue, RuntimeError> {
                     }
                 }
                 scanner::TokenType::Slash => {
-                    Ok(LoxValue::Number(left.get_number().map_err(err)? / right.get_number().map_err(err)?))
+                    let right = right.get_number().map_err(err)?;
+                    if right == 0.0 {
+                        Err(err(String::from("Division by zero")))
+                    } else {
+                        Ok(LoxValue::Number(left.get_number().map_err(err)? / right))
+                    }
                 }
                 scanner::TokenType::Star => {
                     Ok(LoxValue::Number(left.get_number().map_err(err)? * right.get_number().map_err(err)?))
@@ -274,6 +279,7 @@ mod tests {
         assert!(interpret_str("true * false").is_err());
         assert!(interpret_str("-true").is_err());
         assert!(interpret_str("1 < false").is_err());
+        assert!(interpret_str("1 / 0").is_err());
         assert!(interpret_str(r#"-"String""#).is_err());
     }
 }
