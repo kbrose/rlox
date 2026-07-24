@@ -10,6 +10,7 @@ use std::{
 mod define_ast;
 mod ast_printer;
 mod expr;
+mod interpreter;
 mod parser;
 mod scanner;
 
@@ -69,21 +70,9 @@ fn run(source: &str) -> Result<()> {
     #[cfg(feature = "timings")]
     println!("Parsing : {:?}", parsing_timer.elapsed());
 
-    match expression {
-        expr::Expr::Binary(_) => {
-            println!("Root node is Binary");
-        }
-        expr::Expr::Grouping(_) => {
-            println!("Root node is Grouping");
-        }
-        expr::Expr::Literal(_) => {
-            println!("Root node is Literal");
-        }
-        expr::Expr::Unary(_) => {
-            println!("Root node is Unary");
-        }
-    }
-    // println!("{}", ast_printer::pretty_print_expr(&expression));
+    let interpreted = interpreter::interpret_expr(&expression)?;
+
+    println!("{interpreted}");
 
     Ok(())
 }
