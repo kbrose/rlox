@@ -1,9 +1,8 @@
-use crate::ast::Assign;
-use crate::parser::parsed_token::{
-    BinaryOp, BinaryToken, IdentifierToken, ParsedLiteral, UnaryOp, UnaryToken,
-};
 use crate::{
-    ast::{Binary, Expr, Grouping, LiteralExpr, Print, Stmt, StmtExpression, Unary, Var, Variable},
+    ast::{
+        Assign, Binary, Block, Expr, Grouping, LiteralExpr, Print, Stmt, StmtExpression, Unary, Var, Variable,
+    },
+    parser::parsed_token::{BinaryOp, BinaryToken, IdentifierToken, ParsedLiteral, UnaryOp, UnaryToken},
     scanner::{Token, TokenType},
 };
 
@@ -20,10 +19,12 @@ type SResult = Result<Stmt, ParserError>;
 // declaration    → varDecl
 //                | statement ;
 // statement      → exprStmt
-//                | printStmt ;
+//                | printStmt
+//                | block ;
 // varDecl        → "var" IDENTIFIER ( "=" expression )? ";" ;
 // exprStmt       → expression ";" ;
 // printStmt      → "print" expression ";" ;
+// block          → "{" declaration* "}" ;
 //
 //                        Expressions
 //
@@ -268,6 +269,8 @@ impl Parser {
     fn statement(&mut self) -> SResult {
         if self.matches_token(&[TokenType::Print]) {
             self.print_statement()
+        } else if self.matches_token(&[TokenType::LeftBrace]) {
+            self.block()
         } else {
             self.expression_statement()
         }
@@ -277,6 +280,17 @@ impl Parser {
         let expression = self.expression()?;
         self.consume(TokenType::Semicolon, "Expect ';' after value.")?;
         Ok(Print::lift(expression))
+    }
+
+    fn block(&mut self) -> SResult {
+        let mut statements = vec![];
+
+        while !self.check(&TokenType::RightBrace) && !self.is_at_end() {
+            statements.push(self.declaration()?);
+        }
+
+        self.consume(TokenType::RightBrace, "Expect '}' after block.")?;
+        Ok(Block::lift(statements))
     }
 
     fn expression_statement(&mut self) -> SResult {

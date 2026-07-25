@@ -1,6 +1,19 @@
-print "this is a string";
-print true;
-print 2 + 1;
-var x = 5;
-print "x = 5: x * 3 = 15?";
-print x * 3;
+var a = "global a";
+var b = "global b";
+var c = "global c";
+{
+  var a = "outer a";
+  var b = "outer b";
+  {
+    var a = "inner a";
+    print a;
+    print b;
+    print c;
+  }
+  print a;
+  print b;
+  print c;
+}
+print a;
+print b;
+print c;

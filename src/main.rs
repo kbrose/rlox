@@ -3,7 +3,7 @@ use anyhow::{Result, anyhow};
 use std::time::Instant;
 use std::{
     env,
-    io::{self, Write as _},
+    io::{self, Write},
 };
 
 use crate::interpreter::Interpreter;
@@ -33,7 +33,7 @@ fn run_file(path: &String) -> Result<()> {
         anyhow!("")
     })?;
 
-    let mut interpreter = Interpreter::new();
+    let mut interpreter = Interpreter::new(std::io::stdout());
 
     run(&input, &mut interpreter)?;
 
@@ -44,7 +44,7 @@ fn run_prompt() -> Result<()> {
     let mut buffer = String::new();
     let stdin = io::stdin();
     println!("Welcome to rlox! Press Ctrl-D to exit.");
-    let mut interpreter = Interpreter::new();
+    let mut interpreter = Interpreter::new(std::io::stdout());
     loop {
         print!("> ");
         std::io::stdout().flush()?;
@@ -58,7 +58,7 @@ fn run_prompt() -> Result<()> {
     }
 }
 
-fn run(source: &str, interpreter: &mut Interpreter) -> Result<()> {
+fn run<W: Write>(source: &str, interpreter: &mut Interpreter<W>) -> Result<()> {
     #[cfg(feature = "timings")]
     let scanning_timer = Instant::now();
 

@@ -6,6 +6,7 @@ use crate::{
     scanner::TokenLike,
 };
 use anyhow::{Result as AnyhowResult, anyhow};
+use std::io::Write;
 
 #[derive(Debug)]
 pub(crate) struct RuntimeError {
@@ -93,14 +94,16 @@ impl LoxValue {
     }
 }
 
-pub(crate) struct Interpreter {
+pub(crate) struct Interpreter<W: Write> {
     environment: Environment,
+    writer: W,
 }
 
-impl Interpreter {
-    pub(crate) fn new() -> Self {
+impl<W: Write> Interpreter<W> {
+    pub(crate) fn new(writer: W) -> Self {
         Interpreter {
             environment: Environment::new(),
+            writer,
         }
     }
 
@@ -198,8 +201,12 @@ impl Interpreter {
                 Ok(())
             }
             Stmt::Print(print) => {
-                println!("{}", self.evaluate(&print.expression)?);
-                Ok(())
+                let value = self.evaluate(&print.expression)?;
+                writeln!(self.writer, "{}", value).map_err(|e| RuntimeError {
+                    line: 0,
+                    token_display: "".to_string(),
+                    message: format!("Error writing to output stream: {e}"),
+                })
             }
             Stmt::Var(var) => {
                 let value = if let Some(initializer) = var.initializer {
@@ -210,6 +217,21 @@ impl Interpreter {
 
                 self.environment.define(&var.name, value);
 
+                Ok(())
+            }
+            Stmt::Block(block) => {
+                // item
+                self.environment.enter_scope();
+                for statement in block.statements {
+                    match self.execute_stmt(statement) {
+                        Ok(()) => {}
+                        Err(runtime_error) => {
+                            self.environment.exit_scope();
+                            return Err(runtime_error);
+                        }
+                    }
+                }
+                self.environment.exit_scope();
                 Ok(())
             }
         }
@@ -236,7 +258,7 @@ mod tests {
     use super::*;
 
     fn execute_str(s: &str) -> Result<LoxValue, RuntimeError> {
-        let mut interpreter = Interpreter::new();
+        let mut interpreter = Interpreter::new(std::io::stdout());
         let mut with_semicolon = String::with_capacity(s.len() + 1);
         with_semicolon.push_str(s);
         with_semicolon.push(';');
@@ -252,7 +274,7 @@ mod tests {
     }
 
     fn execute_stmt_and_expr(stmt: &str, expr: &str) -> Result<LoxValue, RuntimeError> {
-        let mut interpreter = Interpreter::new();
+        let mut interpreter = Interpreter::new(std::io::stdout());
 
         interpreter
             .interpret(parse(scan_tokens(stmt).expect("scan error")).expect("parse error"))
@@ -266,6 +288,17 @@ mod tests {
                 panic!("Expected statement expression")
             }
         }
+    }
+
+    fn execute_stmts(stmt: &str) -> String {
+        let buffer = Vec::new();
+        let mut interpreter = Interpreter::new(buffer);
+
+        interpreter
+            .interpret(parse(scan_tokens(stmt).expect("scan error")).expect("parse error"))
+            .expect("interpreting error");
+
+        String::from_utf8(interpreter.writer).expect("Error with UTF8 encoding")
     }
 
     fn number(x: f64) -> LoxValue {
@@ -368,5 +401,16 @@ mod tests {
     #[test]
     fn test_assignment() {
         assert_eq!(number(20.0), execute_stmt_and_expr("var x = 10; x = x * 2;", "x;").expect("Error"));
+    }
+
+    #[test]
+    fn test_prints() {
+        assert_eq!(String::from("1\n"), execute_stmts("print 1;"));
+    }
+
+    #[test]
+    fn test_scopes() {
+        assert_eq!(String::from("5\n"), execute_stmts("var x = 0; {x = 5;} print x;"));
+        assert_eq!(String::from("0\n"), execute_stmts("var x = 0; {var x = 5;} print x;"));
     }
 }

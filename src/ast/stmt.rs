@@ -5,6 +5,7 @@ define_ast! {
     Stmt {
         StmtExpression {expression: Expr},
         Print {expression: Expr},
-        Var {name: IdentifierToken, initializer: Option<Expr>}
+        Var {name: IdentifierToken, initializer: Option<Expr>},
+        Block {statements: Vec<Stmt>},
     }
 }
