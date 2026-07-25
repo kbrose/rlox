@@ -15,7 +15,7 @@ pub(crate) struct RuntimeError {
 }
 
 impl RuntimeError {
-    pub(crate) fn new(token: impl TokenLike, message: String) -> Self {
+    pub(crate) fn new(token: &impl TokenLike, message: String) -> Self {
         Self {
             line: token.line(),
             token_display: token.token_display(),
@@ -104,7 +104,7 @@ impl Interpreter {
         }
     }
 
-    fn evaluate(&self, expr: &Expr) -> Result<LoxValue, RuntimeError> {
+    fn evaluate(&mut self, expr: &Expr) -> Result<LoxValue, RuntimeError> {
         match expr {
             Expr::LiteralExpr(literal) => {
                 let out = match &literal.value {
@@ -123,9 +123,7 @@ impl Interpreter {
                 let out = match &unary.operator.op() {
                     crate::parser::UnaryOp::Bang => LoxValue::Boolean(!right.truthiness()),
                     crate::parser::UnaryOp::Minus => LoxValue::Number(
-                        -right
-                            .get_number()
-                            .map_err(|message| RuntimeError::new(unary.operator.clone(), message))?,
+                        -right.get_number().map_err(|message| RuntimeError::new(&unary.operator, message))?,
                     ),
                 };
 
@@ -135,11 +133,8 @@ impl Interpreter {
                 let left = self.evaluate(&binary.left)?;
                 let right = self.evaluate(&binary.right)?;
 
-                let err = |message: String| RuntimeError::new(binary.operator.clone(), message);
-                //     {
-                //     token: binary.operator.clone(),
-                //     message,
-                // };
+                let err = |message: String| RuntimeError::new(&binary.operator, message);
+
                 match binary.operator.op() {
                     crate::parser::BinaryOp::Minus => Ok(LoxValue::Number(
                         left.get_number().map_err(err)? - right.get_number().map_err(err)?,
@@ -185,6 +180,14 @@ impl Interpreter {
                 }
             }
             Expr::Variable(variable) => self.environment.get(&variable.name),
+            Expr::Assign(assign) => {
+                let value = self.evaluate(&assign.value)?;
+                // TODO: Any way to avoid the clone here?
+                match self.environment.assign(&assign.name, value.clone()) {
+                    Ok(()) => Ok(value),
+                    Err(()) => Err(RuntimeError::new(&assign.name, "Undefined variable".to_string())),
+                }
+            }
         }
     }
 
@@ -233,7 +236,7 @@ mod tests {
     use super::*;
 
     fn execute_str(s: &str) -> Result<LoxValue, RuntimeError> {
-        let interpreter = Interpreter::new();
+        let mut interpreter = Interpreter::new();
         let mut with_semicolon = String::with_capacity(s.len() + 1);
         with_semicolon.push_str(s);
         with_semicolon.push(';');
@@ -360,5 +363,10 @@ mod tests {
         assert_eq!(LoxValue::Nil, execute_stmt_and_expr("var x;", "x;").expect("Error"));
         assert_eq!(number(1.0), execute_stmt_and_expr("var x = 1;", "x;").expect("Error"));
         assert_eq!(string("Hi!"), execute_stmt_and_expr(r#"var x = "Hi!";"#, "x;").expect("Error"));
+    }
+
+    #[test]
+    fn test_assignment() {
+        assert_eq!(number(20.0), execute_stmt_and_expr("var x = 10; x = x * 2;", "x;").expect("Error"));
     }
 }

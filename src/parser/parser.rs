@@ -1,3 +1,4 @@
+use crate::ast::Assign;
 use crate::parser::parsed_token::{
     BinaryOp, BinaryToken, IdentifierToken, ParsedLiteral, UnaryOp, UnaryToken,
 };
@@ -5,12 +6,10 @@ use crate::{
     ast::{Binary, Expr, Grouping, LiteralExpr, Print, Stmt, StmtExpression, Unary, Var, Variable},
     scanner::{Token, TokenType},
 };
-use anyhow::{Result, anyhow};
-use std::fmt;
 
 // TODO: Better names for these
-type EResult = Result<Expr>;
-type SResult = Result<Stmt>;
+type EResult = Result<Expr, ParserError>;
+type SResult = Result<Stmt, ParserError>;
 
 //                        Lox Grammar
 // ===========================================================
@@ -28,7 +27,9 @@ type SResult = Result<Stmt>;
 //
 //                        Expressions
 //
-// expression     → comma ;
+// expression     → assignment ;
+// assignment     → IDENTIFIER "=" assignment
+//                | comma ;
 // comma          → equality ( "," equality )* ;
 // equality       → comparison ( ( "!=" | "==" ) comparison )* ;
 // comparison     → term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
@@ -46,21 +47,22 @@ struct Parser {
 }
 
 #[derive(Debug)]
-struct ParserError {
-    token: Token,
-    message: String,
+pub(crate) struct ParserError {}
+
+impl std::fmt::Display for ParserError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ParserError{{}}")
+    }
 }
 
-impl fmt::Display for ParserError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "[Parse Error line: {}, token: {}] {}",
-            self.token.line,
-            self.token.token_type.pretty_print(),
-            self.message
-        )
+impl std::error::Error for ParserError {
+    fn description(&self) -> &str {
+        "Parser error"
     }
+}
+
+fn error(line: usize, token_str: String, message: &str) {
+    eprintln!("[Parse Error line: {}, token: {}] {}", line, token_str, message);
 }
 
 impl Parser {
@@ -72,13 +74,13 @@ impl Parser {
         }
     }
 
-    fn parse(&mut self) -> Result<Vec<Stmt>> {
+    fn parse(&mut self) -> Result<Vec<Stmt>, ParserError> {
         let mut statements = vec![];
         while !self.is_at_end() {
             statements.push(self.declaration()?);
         }
         if self.parse_error {
-            Err(anyhow!("Parsing error (recoverable)."))
+            Err(ParserError {})
         } else {
             Ok(statements)
         }
@@ -130,22 +132,26 @@ impl Parser {
         self.tokens.get(self.current.wrapping_sub(1))
     }
 
-    fn consume(&mut self, expected: TokenType, message: &str) -> Result<Option<&Token>> {
+    fn consume(&mut self, expected: TokenType, message: &str) -> Result<Option<&Token>, ParserError> {
         if self.check(&expected) {
             Ok(self.advance())
         } else {
-            Err(anyhow!("{}", self.error(self.peek().clone(), message)))
+            let token = self.peek();
+            error(token.line, token.token_type.pretty_print(), message);
+            Err(ParserError {})
         }
     }
 
-    fn consume_identifier(&mut self, message: &str) -> Result<Option<IdentifierToken>> {
+    fn consume_identifier(&mut self, message: &str) -> Result<Option<IdentifierToken>, ParserError> {
         if self.check(&TokenType::Identifier(String::new())) {
             Ok(self.advance().map(|token| match &token.token_type {
                 TokenType::Identifier(identifier) => IdentifierToken::new(identifier.clone(), token.line),
                 _ => panic!("Checked for identifier, but now advance() doesn't return identifier?"),
             }))
         } else {
-            Err(anyhow!("{}", self.error(self.peek().clone(), message)))
+            let token = self.peek();
+            error(token.line, token.token_type.pretty_print(), message);
+            Err(ParserError {})
         }
     }
 
@@ -178,21 +184,12 @@ impl Parser {
         }
     }
 
-    fn error(&mut self, cause: Token, message: &str) -> ParserError {
-        self.parse_error = true;
-        let error = ParserError {
-            token: cause,
-            message: message.to_string(),
-        };
-        eprintln!("{}", error);
-        error
-    }
-
     fn binary_op_missing_lhs_error_production<F>(&mut self, mut next_grammar: F) -> EResult
     where
         F: FnMut(&mut Self) -> EResult,
     {
-        self.error(self.peek().clone(), "Expected expression, found binary operator");
+        let token = self.peek();
+        error(token.line, token.token_type.pretty_print(), "Expected expression, found binary operator");
         // Throwaway the extra RHS. Forward the hard error if there was one.
         let _ = next_grammar(self)?;
         self.expression() // Restart at the bottom of the hierarchy.
@@ -289,7 +286,34 @@ impl Parser {
     }
 
     fn expression(&mut self) -> EResult {
-        self.comma()
+        self.assignment()
+    }
+
+    fn assignment(&mut self) -> EResult {
+        let expression = self.comma()?;
+
+        if self.matches_token(&[TokenType::Equal]) {
+            // This token is ~guaranteed to be an Equal token, but we only need it
+            // for error reporting.
+            let (line, token_str) = {
+                let token = self.previous().expect("Empty previous after advance");
+                (token.line, token.token_type.pretty_print())
+            };
+
+            let value = self.assignment()?;
+
+            match expression {
+                Expr::Variable(variable) => {
+                    let name = variable.name;
+                    return Ok(Assign::lift(name, value));
+                }
+                _ => {
+                    error(line, token_str, "Invalid assignment target.");
+                }
+            }
+        }
+
+        Ok(expression)
     }
 
     fn comma(&mut self) -> EResult {
@@ -384,12 +408,14 @@ impl Parser {
         } else if self.matches_token(&[TokenType::Slash, TokenType::Star]) {
             self.binary_op_missing_lhs_error_production(Self::unary)
         } else {
-            Err(anyhow!("{}", self.error(self.peek().clone(), "Expected expresion.")))
+            let token = self.peek();
+            error(token.line, token.token_type.pretty_print(), "Expected expression.");
+            Err(ParserError {})
         }
     }
 }
 
-pub(crate) fn parse(tokens: Vec<Token>) -> Result<Vec<Stmt>> {
+pub(crate) fn parse(tokens: Vec<Token>) -> Result<Vec<Stmt>, ParserError> {
     let mut parser = Parser::new(tokens);
     parser.parse()
 }

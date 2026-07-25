@@ -18,11 +18,21 @@ impl Environment {
         self.values.insert(name.identifier().to_string(), value);
     }
 
+    pub(crate) fn assign(&mut self, name: &IdentifierToken, value: LoxValue) -> Result<(), ()> {
+        let key = name.identifier().to_string();
+        if self.values.contains_key(&key) {
+            self.values.insert(key, value);
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
     pub(crate) fn get(&self, name: &IdentifierToken) -> Result<LoxValue, RuntimeError> {
         // TODO: Any way to avoid the clone here?
         self.values
             .get(name.identifier())
-            .ok_or_else(|| RuntimeError::new(name.clone(), "Unknown variable".to_string()))
+            .ok_or_else(|| RuntimeError::new(name, "Unknown variable".to_string()))
             .map(|x| x.clone())
     }
 }
