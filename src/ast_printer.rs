@@ -18,6 +18,9 @@ pub(crate) fn pretty_print_expr(expr: &Expr) -> String {
         Expr::Unary(unary) => {
             format!("({} {})", unary.operator.token_type.pretty_print(), pretty_print_expr(&unary.expression))
         }
+        Expr::Variable(variable) => {
+            format!("var {}", variable.name.identifier.0)
+        }
     }
 }
 

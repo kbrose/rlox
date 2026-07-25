@@ -1,6 +1,7 @@
 use std::fmt;
 
 use crate::{
+    environment::Environment,
     expr::Expr,
     scanner::{self, Token},
     stmt::Stmt,
@@ -8,9 +9,18 @@ use crate::{
 use anyhow::{Result as AnyhowResult, anyhow};
 
 #[derive(Debug)]
-struct RuntimeError {
+pub(crate) struct RuntimeError {
     token: Token,
     message: String,
+}
+
+impl RuntimeError {
+    pub(crate) fn new(token: Token, message: String) -> Self {
+        Self {
+            token,
+            message,
+        }
+    }
 }
 
 impl fmt::Display for RuntimeError {
@@ -25,7 +35,7 @@ impl fmt::Display for RuntimeError {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum LoxValue {
     Nil,
     Boolean(bool),
@@ -88,115 +98,139 @@ impl LoxValue {
     }
 }
 
-fn evaluate(expr: &Expr) -> Result<LoxValue, RuntimeError> {
-    match expr {
-        Expr::Literal(literal) => {
-            let out = match &literal.value {
-                scanner::TokenType::Nil => LoxValue::Nil,
-                scanner::TokenType::True => LoxValue::Boolean(true),
-                scanner::TokenType::False => LoxValue::Boolean(false),
-                scanner::TokenType::String(s) => LoxValue::String(s.clone()),
-                scanner::TokenType::Number(x) => LoxValue::Number(*x),
-                _ => panic!("Unexpected token type for literal!"), // TODO: Don't panic, make unrepresentable
-            };
-            Ok(out)
+pub(crate) struct Interpreter {
+    environment: Environment,
+}
+
+impl Interpreter {
+    pub(crate) fn new() -> Self {
+        Interpreter {
+            environment: Environment::new(),
         }
-        Expr::Grouping(grouping) => evaluate(&grouping.expression),
-        Expr::Unary(unary) => {
-            let right = evaluate(&unary.expression)?;
+    }
 
-            let out = match &unary.operator.token_type {
-                scanner::TokenType::Bang => LoxValue::Boolean(!right.truthiness()),
-                scanner::TokenType::Minus => {
-                    LoxValue::Number(-right.get_number().map_err(|message| RuntimeError {
-                        token: unary.operator.clone(),
-                        message,
-                    })?)
+    fn evaluate(&self, expr: &Expr) -> Result<LoxValue, RuntimeError> {
+        match expr {
+            Expr::Literal(literal) => {
+                let out = match &literal.value {
+                    scanner::TokenType::Nil => LoxValue::Nil,
+                    scanner::TokenType::True => LoxValue::Boolean(true),
+                    scanner::TokenType::False => LoxValue::Boolean(false),
+                    scanner::TokenType::String(s) => LoxValue::String(s.clone()),
+                    scanner::TokenType::Number(x) => LoxValue::Number(*x),
+                    _ => panic!("Unexpected token type for literal!"), // TODO: Don't panic, make unrepresentable
+                };
+                Ok(out)
+            }
+            Expr::Grouping(grouping) => self.evaluate(&grouping.expression),
+            Expr::Unary(unary) => {
+                let right = self.evaluate(&unary.expression)?;
+
+                let out = match &unary.operator.token_type {
+                    scanner::TokenType::Bang => LoxValue::Boolean(!right.truthiness()),
+                    scanner::TokenType::Minus => {
+                        LoxValue::Number(-right.get_number().map_err(|message| RuntimeError {
+                            token: unary.operator.clone(),
+                            message,
+                        })?)
+                    }
+                    _ => panic!("Unexpected token type for unary!"), // TODO: Don't panic, make unrepresentable
+                };
+
+                Ok(out)
+            }
+            Expr::Binary(binary) => {
+                let left = self.evaluate(&binary.left)?;
+                let right = self.evaluate(&binary.right)?;
+
+                let err = |message: String| RuntimeError {
+                    token: binary.operator.clone(),
+                    message,
+                };
+                match binary.operator.token_type {
+                    scanner::TokenType::Minus => Ok(LoxValue::Number(
+                        left.get_number().map_err(err)? - right.get_number().map_err(err)?,
+                    )),
+                    scanner::TokenType::Plus => {
+                        if let (Ok(l), Ok(r)) = (left.get_number(), right.get_number()) {
+                            Ok(LoxValue::Number(l + r))
+                        } else if let (Ok(l), Ok(r)) = (left.get_string(), right.get_string()) {
+                            let mut s = String::with_capacity(l.len() + r.len());
+                            s.push_str(l);
+                            s.push_str(r);
+                            Ok(LoxValue::String(s))
+                        } else {
+                            Err(err(String::from("Type error: + with incompatible types")))
+                        }
+                    }
+                    scanner::TokenType::Slash => {
+                        let right = right.get_number().map_err(err)?;
+                        if right == 0.0 {
+                            Err(err(String::from("Division by zero")))
+                        } else {
+                            Ok(LoxValue::Number(left.get_number().map_err(err)? / right))
+                        }
+                    }
+                    scanner::TokenType::Star => Ok(LoxValue::Number(
+                        left.get_number().map_err(err)? * right.get_number().map_err(err)?,
+                    )),
+                    scanner::TokenType::Greater => Ok(LoxValue::Boolean(
+                        left.get_number().map_err(err)? > right.get_number().map_err(err)?,
+                    )),
+                    scanner::TokenType::GreaterEqual => Ok(LoxValue::Boolean(
+                        left.get_number().map_err(err)? >= right.get_number().map_err(err)?,
+                    )),
+                    scanner::TokenType::Less => Ok(LoxValue::Boolean(
+                        left.get_number().map_err(err)? < right.get_number().map_err(err)?,
+                    )),
+                    scanner::TokenType::LessEqual => Ok(LoxValue::Boolean(
+                        left.get_number().map_err(err)? <= right.get_number().map_err(err)?,
+                    )),
+                    scanner::TokenType::BangEqual => Ok(LoxValue::Boolean(!left.is_equal(&right))),
+                    scanner::TokenType::EqualEqual => Ok(LoxValue::Boolean(left.is_equal(&right))),
+                    _ => panic!("Unexpected token type for binary!"), // TODO: Don't panic, make unrepresentable
                 }
-                _ => panic!("Unexpected token type for unary!"), // TODO: Don't panic, make unrepresentable
-            };
-
-            Ok(out)
+            }
+            Expr::Variable(variable) => self.environment.get(&variable.name),
         }
-        Expr::Binary(binary) => {
-            let left = evaluate(&binary.left)?;
-            let right = evaluate(&binary.right)?;
+    }
 
-            let err = |message: String| RuntimeError {
-                token: binary.operator.clone(),
-                message,
-            };
-            match binary.operator.token_type {
-                scanner::TokenType::Minus => {
-                    Ok(LoxValue::Number(left.get_number().map_err(err)? - right.get_number().map_err(err)?))
-                }
-                scanner::TokenType::Plus => {
-                    if let (Ok(l), Ok(r)) = (left.get_number(), right.get_number()) {
-                        Ok(LoxValue::Number(l + r))
-                    } else if let (Ok(l), Ok(r)) = (left.get_string(), right.get_string()) {
-                        let mut s = String::with_capacity(l.len() + r.len());
-                        s.push_str(l);
-                        s.push_str(r);
-                        Ok(LoxValue::String(s))
-                    } else {
-                        Err(err(String::from("Type error: + with incompatible types")))
-                    }
-                }
-                scanner::TokenType::Slash => {
-                    let right = right.get_number().map_err(err)?;
-                    if right == 0.0 {
-                        Err(err(String::from("Division by zero")))
-                    } else {
-                        Ok(LoxValue::Number(left.get_number().map_err(err)? / right))
-                    }
-                }
-                scanner::TokenType::Star => {
-                    Ok(LoxValue::Number(left.get_number().map_err(err)? * right.get_number().map_err(err)?))
-                }
-                scanner::TokenType::Greater => {
-                    Ok(LoxValue::Boolean(left.get_number().map_err(err)? > right.get_number().map_err(err)?))
-                }
-                scanner::TokenType::GreaterEqual => {
-                    Ok(LoxValue::Boolean(left.get_number().map_err(err)? >= right.get_number().map_err(err)?))
-                }
-                scanner::TokenType::Less => {
-                    Ok(LoxValue::Boolean(left.get_number().map_err(err)? < right.get_number().map_err(err)?))
-                }
-                scanner::TokenType::LessEqual => {
-                    Ok(LoxValue::Boolean(left.get_number().map_err(err)? <= right.get_number().map_err(err)?))
-                }
-                scanner::TokenType::BangEqual => Ok(LoxValue::Boolean(!left.is_equal(&right))),
-                scanner::TokenType::EqualEqual => Ok(LoxValue::Boolean(left.is_equal(&right))),
-                _ => panic!("Unexpected token type for binary!"), // TODO: Don't panic, make unrepresentable
+    fn execute_stmt(&mut self, stmt: Stmt) -> Result<(), RuntimeError> {
+        match stmt {
+            Stmt::StmtExpression(stmt_expression) => {
+                self.evaluate(&stmt_expression.expression)?;
+                Ok(())
+            }
+            Stmt::Print(print) => {
+                println!("{}", self.evaluate(&print.expression)?);
+                Ok(())
+            }
+            Stmt::Var(var) => {
+                let value = if let Some(initializer) = var.initializer {
+                    self.evaluate(&initializer)
+                } else {
+                    Ok(LoxValue::Nil)
+                }?;
+
+                self.environment.define(var.name.identifier.0, value);
+
+                Ok(())
             }
         }
     }
-}
 
-fn execute_stmt(stmt: Stmt) -> Result<(), RuntimeError> {
-    match stmt {
-        Stmt::StmtExpression(stmt_expression) => {
-            evaluate(&stmt_expression.expression)?;
-            Ok(())
+    // This will have to be converted into an Interpreter struct once we have global vars
+    // that should be preserved across runs in the REPL. Or alternatively, some kind of
+    // &mut Globals passed in or something like that.
+    pub(crate) fn interpret(&mut self, stmts: Vec<Stmt>) -> AnyhowResult<()> {
+        for stmt in stmts {
+            self.execute_stmt(stmt).map_err(|e| {
+                eprintln!("{e}");
+                anyhow!("")
+            })?;
         }
-        Stmt::Print(print) => {
-            println!("{}", evaluate(&print.expression)?);
-            Ok(())
-        }
+        Ok(())
     }
-}
-
-// This will have to be converted into an Interpreter struct once we have global vars
-// that should be preserved across runs in the REPL. Or alternatively, some kind of
-// &mut Globals passed in or something like that.
-pub(crate) fn interpret(stmts: Vec<Stmt>) -> AnyhowResult<()> {
-    for stmt in stmts {
-        execute_stmt(stmt).map_err(|e| {
-            eprintln!("{e}");
-            anyhow!("")
-        })?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -206,18 +240,36 @@ mod tests {
     use super::*;
 
     fn execute_str(s: &str) -> Result<LoxValue, RuntimeError> {
+        let interpreter = Interpreter::new();
         let mut with_semicolon = String::with_capacity(s.len() + 1);
         with_semicolon.push_str(s);
         with_semicolon.push(';');
         let parsed = parse(scan_tokens(&with_semicolon).expect("scan error")).expect("parse error");
         assert!(parsed.len() == 1);
         match parsed.first().unwrap() {
-            Stmt::StmtExpression(stmt_expression) => evaluate(&stmt_expression.expression),
-            Stmt::Print(_) => {
+            Stmt::StmtExpression(stmt_expression) => interpreter.evaluate(&stmt_expression.expression),
+            _ => {
                 panic!("Expected statement expression")
             }
         }
         // interpret_expr(&)
+    }
+
+    fn execute_stmt_and_expr(stmt: &str, expr: &str) -> Result<LoxValue, RuntimeError> {
+        let mut interpreter = Interpreter::new();
+
+        interpreter
+            .interpret(parse(scan_tokens(stmt).expect("scan error")).expect("parse error"))
+            .expect("interpreting error");
+
+        let parsed = parse(scan_tokens(expr).expect("scan error")).expect("parse error");
+        assert!(parsed.len() == 1);
+        match parsed.first().unwrap() {
+            Stmt::StmtExpression(stmt_expression) => interpreter.evaluate(&stmt_expression.expression),
+            _ => {
+                panic!("Expected statement expression")
+            }
+        }
     }
 
     fn number(x: f64) -> LoxValue {
@@ -308,5 +360,12 @@ mod tests {
         assert!(execute_str("1 < false").is_err());
         assert!(execute_str("1 / 0").is_err());
         assert!(execute_str(r#"-"String""#).is_err());
+    }
+
+    #[test]
+    fn test_variables() {
+        assert_eq!(LoxValue::Nil, execute_stmt_and_expr("var x;", "x;").expect("Error"));
+        assert_eq!(number(1.0), execute_stmt_and_expr("var x = 1;", "x;").expect("Error"));
+        assert_eq!(string("Hi!"), execute_stmt_and_expr(r#"var x = "Hi!";"#, "x;").expect("Error"));
     }
 }

@@ -16,6 +16,24 @@ impl fmt::Display for ScanError {
 }
 
 #[derive(Debug, PartialEq, Clone)]
+pub(crate) struct Identifier(pub(crate) String);
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct IdentifierToken {
+    pub(crate) identifier: Identifier,
+    pub(crate) line: usize,
+}
+
+impl IdentifierToken {
+    pub(crate) fn to_token(&self) -> Token {
+        Token {
+            token_type: TokenType::Identifier(self.identifier.clone()),
+            line: self.line,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum TokenType {
     // Single-character tokens.
     LeftParen,
@@ -41,7 +59,7 @@ pub(crate) enum TokenType {
     LessEqual,
 
     //Literals.
-    Identifier(String),
+    Identifier(Identifier),
     String(String),
     Number(f64),
 
@@ -89,7 +107,7 @@ impl TokenType {
             TokenType::GreaterEqual => ">=".to_string(),
             TokenType::Less => "<".to_string(),
             TokenType::LessEqual => "<=".to_string(),
-            TokenType::Identifier(s) => s.clone(),
+            TokenType::Identifier(i) => i.0.clone(),
             TokenType::String(s) => format!("\"{}\"", s),
             TokenType::Number(x) => format!("{x}"),
             TokenType::And => "and".to_string(),
@@ -353,7 +371,7 @@ impl StateMachine {
             _ => {
                 let token_type = match KEYWORD_MAP.get(s.as_str()) {
                     Some(token_type) => token_type.clone(),
-                    None => TokenType::Identifier(s),
+                    None => TokenType::Identifier(Identifier(s)),
                 };
                 let (maybe_token, next_state) = Self::process_top_level(char)?;
                 Ok(([Some(token_type), maybe_token], next_state))
@@ -504,16 +522,16 @@ mod tests {
     #[test]
     fn test_identifier() {
         let tokens = scan_tokens("a ").unwrap();
-        assert_eq!(tokens, one_liner(vec![TokenType::Identifier("a".to_string())]));
+        assert_eq!(tokens, one_liner(vec![TokenType::Identifier(Identifier("a".to_string()))]));
 
         let tokens = scan_tokens("a").unwrap();
-        assert_eq!(tokens, one_liner(vec![TokenType::Identifier("a".to_string())]));
+        assert_eq!(tokens, one_liner(vec![TokenType::Identifier(Identifier("a".to_string()))]));
 
         let tokens = scan_tokens("a5").unwrap();
-        assert_eq!(tokens, one_liner(vec![TokenType::Identifier("a5".to_string())]));
+        assert_eq!(tokens, one_liner(vec![TokenType::Identifier(Identifier("a5".to_string()))]));
 
         let tokens = scan_tokens("_az_AZ_09_").unwrap();
-        assert_eq!(tokens, one_liner(vec![TokenType::Identifier("_az_AZ_09_".to_string())]));
+        assert_eq!(tokens, one_liner(vec![TokenType::Identifier(Identifier("_az_AZ_09_".to_string()))]));
     }
 
     #[test]

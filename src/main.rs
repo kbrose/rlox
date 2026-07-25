@@ -6,9 +6,12 @@ use std::{
     io::{self, Write as _},
 };
 
+use crate::interpreter::Interpreter;
+
 #[macro_use]
 mod define_ast;
 mod ast_printer;
+mod environment;
 mod expr;
 mod interpreter;
 mod parser;
@@ -32,7 +35,9 @@ fn run_file(path: &String) -> Result<()> {
         anyhow!("")
     })?;
 
-    run(&input)?;
+    let mut interpreter = Interpreter::new();
+
+    run(&input, &mut interpreter)?;
 
     Ok(())
 }
@@ -41,6 +46,7 @@ fn run_prompt() -> Result<()> {
     let mut buffer = String::new();
     let stdin = io::stdin();
     println!("Welcome to rlox! Press Ctrl-D to exit.");
+    let mut interpreter = Interpreter::new();
     loop {
         print!("> ");
         std::io::stdout().flush()?;
@@ -49,12 +55,12 @@ fn run_prompt() -> Result<()> {
             println!("");
             break Ok(());
         }
-        let _ = run(&buffer); // Errors should have already been printed.
+        let _ = run(&buffer, &mut interpreter); // Errors should have already been printed.
         buffer.clear(); // clear contents but keep allocated size
     }
 }
 
-fn run(source: &str) -> Result<()> {
+fn run(source: &str, interpreter: &mut Interpreter) -> Result<()> {
     #[cfg(feature = "timings")]
     let scanning_timer = Instant::now();
 
@@ -71,7 +77,7 @@ fn run(source: &str) -> Result<()> {
     #[cfg(feature = "timings")]
     println!("Parsing : {:?}", parsing_timer.elapsed());
 
-    interpreter::interpret(statements)?;
+    interpreter.interpret(statements)?;
 
     Ok(())
 }

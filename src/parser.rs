@@ -1,15 +1,18 @@
 use crate::{
-    expr::{Binary, Expr, Grouping, Literal, Unary},
-    scanner::{Token, TokenType},
-    stmt::{Print, Stmt, StmtExpression},
+    expr::{Binary, Expr, Grouping, Literal, Unary, Variable},
+    scanner::{Identifier, IdentifierToken, Token, TokenType},
+    stmt::{Print, Stmt, StmtExpression, Var},
 };
 use anyhow::{Result, anyhow};
 use std::fmt;
 
 // Statement:
-// program        → statement* EOF ;
+// program        → declaration* EOF ;
+// declaration    → varDecl
+//                | statement ;
 // statement      → exprStmt
 //                | printStmt ;
+// varDecl        → "var" IDENTIFIER ( "=" expression )? ";" ;
 // exprStmt       → expression ";" ;
 // printStmt      → "print" expression ";" ;
 //
@@ -24,6 +27,7 @@ use std::fmt;
 //                | primary ;
 // primary        → NUMBER | STRING | "true" | "false" | "nil"
 //                | "(" expression ")" ;
+//                | IDENTIFIER
 
 // TODO: Better names for these
 type EResult = Result<Expr>;
@@ -65,7 +69,7 @@ impl Parser {
     fn parse(&mut self) -> Result<Vec<Stmt>> {
         let mut statements = vec![];
         while !self.is_at_end() {
-            statements.push(self.statement()?);
+            statements.push(self.declaration()?);
         }
         if self.parse_error {
             Err(anyhow!("Parsing error (recoverable)."))
@@ -74,6 +78,7 @@ impl Parser {
         }
     }
 
+    // TODO: It would be nice if this returned Option<...>: the item that passed the .check()
     fn matches_token(&mut self, targets: &[TokenType]) -> bool {
         for target in targets {
             if self.check(target) {
@@ -121,6 +126,20 @@ impl Parser {
     fn consume(&mut self, expected: TokenType, message: &str) -> Result<Option<&Token>> {
         if self.check(&expected) {
             Ok(self.advance())
+        } else {
+            Err(anyhow!("{}", self.error(self.peek().clone(), message)))
+        }
+    }
+
+    fn consume_identifier(&mut self, message: &str) -> Result<Option<IdentifierToken>> {
+        if self.check(&TokenType::Identifier(Identifier(String::new()))) {
+            Ok(self.advance().map(|token| match &token.token_type {
+                TokenType::Identifier(identifier) => IdentifierToken {
+                    identifier: identifier.clone(),
+                    line: token.line,
+                },
+                _ => panic!("Checked for identifier, but now advance() doesn't return identifier?"),
+            }))
         } else {
             Err(anyhow!("{}", self.error(self.peek().clone(), message)))
         }
@@ -188,6 +207,37 @@ impl Parser {
         }
 
         Ok(expr)
+    }
+
+    fn declaration(&mut self) -> SResult {
+        let out = if self.matches_token(&[TokenType::Var]) {
+            self.var_declaration()
+        } else {
+            self.statement()
+        };
+
+        match out {
+            Ok(stmt) => Ok(stmt),
+            Err(e) => {
+                self.synchronize();
+                Err(e)
+            }
+        }
+    }
+
+    fn var_declaration(&mut self) -> SResult {
+        let name =
+            self.consume_identifier("Expect variable name.")?.expect("Empty previous even after advancing?");
+
+        let initializer = if self.matches_token(&[TokenType::Equal]) {
+            Some(self.expression()?)
+        } else {
+            None
+        };
+
+        self.consume(TokenType::Semicolon, "Expect ';' after variable declaration.")?;
+
+        Ok(Var::lift(name, initializer))
     }
 
     fn statement(&mut self) -> SResult {
@@ -262,6 +312,15 @@ impl Parser {
             Ok(Literal::lift(
                 self.previous().expect("Empty previous even after advancing?").token_type.clone(),
             ))
+        } else if self.matches_token(&[TokenType::Identifier(Identifier(String::new()))]) {
+            let prev = self.previous().expect("Empty previous even after advancing?");
+            match &prev.token_type {
+                TokenType::Identifier(identifier) => Ok(Variable::lift(IdentifierToken {
+                    identifier: identifier.clone(),
+                    line: prev.line,
+                })),
+                _ => panic!("Matched on identifier, but then previous() didn't return identifier"),
+            }
         } else if self.matches_token(&[TokenType::LeftParen]) {
             let expression = self.expression()?;
             self.consume(TokenType::RightParen, "Expect ')' after expression.")?;

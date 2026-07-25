@@ -1,4 +1,4 @@
-use crate::scanner::{Token, TokenType};
+use crate::scanner::{IdentifierToken, Token, TokenType};
 
 define_ast! {
     Expr {
@@ -6,5 +6,6 @@ define_ast! {
         Grouping {expression: Expr},
         Literal {value: TokenType},
         Unary {operator: Token, expression: Expr},
+        Variable {name: IdentifierToken}
     }
 }
