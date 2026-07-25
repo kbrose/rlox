@@ -10,13 +10,11 @@ use crate::interpreter::Interpreter;
 
 #[macro_use]
 mod define_ast;
-mod ast_printer;
+mod ast;
 mod environment;
-mod expr;
 mod interpreter;
 mod parser;
 mod scanner;
-mod stmt;
 
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();

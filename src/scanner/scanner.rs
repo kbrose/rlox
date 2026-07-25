@@ -1,3 +1,4 @@
+use crate::scanner::token::{Token, TokenType};
 use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use std::fmt;
@@ -12,122 +13,6 @@ struct ScanError {
 impl fmt::Display for ScanError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "[Scan Error line: {}] {}", self.line, self.message)
-    }
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) struct Identifier(pub(crate) String);
-
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) struct IdentifierToken {
-    pub(crate) identifier: Identifier,
-    pub(crate) line: usize,
-}
-
-impl IdentifierToken {
-    pub(crate) fn to_token(&self) -> Token {
-        Token {
-            token_type: TokenType::Identifier(self.identifier.clone()),
-            line: self.line,
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) enum TokenType {
-    // Single-character tokens.
-    LeftParen,
-    RightParen,
-    LeftBrace,
-    RightBrace,
-    Comma,
-    Dot,
-    Minus,
-    Plus,
-    Semicolon,
-    Slash,
-    Star,
-
-    //OneOrTwoCharacterTokens.
-    Bang,
-    BangEqual,
-    Equal,
-    EqualEqual,
-    Greater,
-    GreaterEqual,
-    Less,
-    LessEqual,
-
-    //Literals.
-    Identifier(Identifier),
-    String(String),
-    Number(f64),
-
-    //Keywords.
-    And,
-    Class,
-    Else,
-    False,
-    Fun,
-    For,
-    If,
-    Nil,
-    Or,
-    Print,
-    Return,
-    Super,
-    This,
-    True,
-    Var,
-    While,
-
-    // End of file
-    Eof,
-}
-
-impl TokenType {
-    pub(crate) fn pretty_print(self: &Self) -> String {
-        match &self {
-            TokenType::LeftParen => "(".to_string(),
-            TokenType::RightParen => ")".to_string(),
-            TokenType::LeftBrace => "{".to_string(),
-            TokenType::RightBrace => "}".to_string(),
-            TokenType::Comma => ",".to_string(),
-            TokenType::Dot => ".".to_string(),
-            TokenType::Minus => "-".to_string(),
-            TokenType::Plus => "+".to_string(),
-            TokenType::Semicolon => ";".to_string(),
-            TokenType::Slash => "/".to_string(),
-            TokenType::Star => "*".to_string(),
-            TokenType::Bang => "!".to_string(),
-            TokenType::BangEqual => "!=".to_string(),
-            TokenType::Equal => "=".to_string(),
-            TokenType::EqualEqual => "==".to_string(),
-            TokenType::Greater => ">".to_string(),
-            TokenType::GreaterEqual => ">=".to_string(),
-            TokenType::Less => "<".to_string(),
-            TokenType::LessEqual => "<=".to_string(),
-            TokenType::Identifier(i) => i.0.clone(),
-            TokenType::String(s) => format!("\"{}\"", s),
-            TokenType::Number(x) => format!("{x}"),
-            TokenType::And => "and".to_string(),
-            TokenType::Class => "class ".to_string(),
-            TokenType::Else => "else".to_string(),
-            TokenType::False => "false".to_string(),
-            TokenType::Fun => "fun".to_string(),
-            TokenType::For => "for".to_string(),
-            TokenType::If => "if".to_string(),
-            TokenType::Nil => "nil".to_string(),
-            TokenType::Or => "or".to_string(),
-            TokenType::Print => "print".to_string(),
-            TokenType::Return => "return".to_string(),
-            TokenType::Super => "super".to_string(),
-            TokenType::This => "this".to_string(),
-            TokenType::True => "true".to_string(),
-            TokenType::Var => "var".to_string(),
-            TokenType::While => "while".to_string(),
-            TokenType::Eof => "<EOF>".to_string(),
-        }
     }
 }
 
@@ -151,12 +36,6 @@ static KEYWORD_MAP: LazyLock<HashMap<&'static str, TokenType>> = LazyLock::new(|
         ("while", TokenType::While),
     ])
 });
-
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) struct Token {
-    pub(crate) token_type: TokenType,
-    pub(crate) line: usize,
-}
 
 struct StateMachineError {
     message: String,
@@ -371,7 +250,7 @@ impl StateMachine {
             _ => {
                 let token_type = match KEYWORD_MAP.get(s.as_str()) {
                     Some(token_type) => token_type.clone(),
-                    None => TokenType::Identifier(Identifier(s)),
+                    None => TokenType::Identifier(s),
                 };
                 let (maybe_token, next_state) = Self::process_top_level(char)?;
                 Ok(([Some(token_type), maybe_token], next_state))
@@ -522,16 +401,16 @@ mod tests {
     #[test]
     fn test_identifier() {
         let tokens = scan_tokens("a ").unwrap();
-        assert_eq!(tokens, one_liner(vec![TokenType::Identifier(Identifier("a".to_string()))]));
+        assert_eq!(tokens, one_liner(vec![TokenType::Identifier("a".to_string())]));
 
         let tokens = scan_tokens("a").unwrap();
-        assert_eq!(tokens, one_liner(vec![TokenType::Identifier(Identifier("a".to_string()))]));
+        assert_eq!(tokens, one_liner(vec![TokenType::Identifier("a".to_string())]));
 
         let tokens = scan_tokens("a5").unwrap();
-        assert_eq!(tokens, one_liner(vec![TokenType::Identifier(Identifier("a5".to_string()))]));
+        assert_eq!(tokens, one_liner(vec![TokenType::Identifier("a5".to_string())]));
 
         let tokens = scan_tokens("_az_AZ_09_").unwrap();
-        assert_eq!(tokens, one_liner(vec![TokenType::Identifier(Identifier("_az_AZ_09_".to_string()))]));
+        assert_eq!(tokens, one_liner(vec![TokenType::Identifier("_az_AZ_09_".to_string())]));
     }
 
     #[test]

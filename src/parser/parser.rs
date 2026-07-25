@@ -1,12 +1,22 @@
+use crate::parser::parsed_token::{
+    BinaryOp, BinaryToken, IdentifierToken, ParsedLiteral, UnaryOp, UnaryToken,
+};
 use crate::{
-    expr::{Binary, Expr, Grouping, Literal, Unary, Variable},
-    scanner::{Identifier, IdentifierToken, Token, TokenType},
-    stmt::{Print, Stmt, StmtExpression, Var},
+    ast::{Binary, Expr, Grouping, LiteralExpr, Print, Stmt, StmtExpression, Unary, Var, Variable},
+    scanner::{Token, TokenType},
 };
 use anyhow::{Result, anyhow};
 use std::fmt;
 
-// Statement:
+// TODO: Better names for these
+type EResult = Result<Expr>;
+type SResult = Result<Stmt>;
+
+//                        Lox Grammar
+// ===========================================================
+//
+//                        Statements
+//
 // program        → declaration* EOF ;
 // declaration    → varDecl
 //                | statement ;
@@ -16,7 +26,8 @@ use std::fmt;
 // exprStmt       → expression ";" ;
 // printStmt      → "print" expression ";" ;
 //
-// Expression:
+//                        Expressions
+//
 // expression     → comma ;
 // comma          → equality ( "," equality )* ;
 // equality       → comparison ( ( "!=" | "==" ) comparison )* ;
@@ -28,11 +39,6 @@ use std::fmt;
 // primary        → NUMBER | STRING | "true" | "false" | "nil"
 //                | "(" expression ")" ;
 //                | IDENTIFIER
-
-// TODO: Better names for these
-type EResult = Result<Expr>;
-type SResult = Result<Stmt>;
-
 struct Parser {
     tokens: Vec<Token>,
     current: usize,
@@ -58,7 +64,7 @@ impl fmt::Display for ParserError {
 }
 
 impl Parser {
-    fn new(tokens: Vec<Token>) -> Self {
+    pub(crate) fn new(tokens: Vec<Token>) -> Self {
         Parser {
             tokens,
             current: 0,
@@ -89,6 +95,7 @@ impl Parser {
         return false;
     }
 
+    // TODO: Should also return Option<...>?
     fn check(&self, token_type: &TokenType) -> bool {
         if self.is_at_end() {
             false
@@ -132,12 +139,9 @@ impl Parser {
     }
 
     fn consume_identifier(&mut self, message: &str) -> Result<Option<IdentifierToken>> {
-        if self.check(&TokenType::Identifier(Identifier(String::new()))) {
+        if self.check(&TokenType::Identifier(String::new())) {
             Ok(self.advance().map(|token| match &token.token_type {
-                TokenType::Identifier(identifier) => IdentifierToken {
-                    identifier: identifier.clone(),
-                    line: token.line,
-                },
+                TokenType::Identifier(identifier) => IdentifierToken::new(identifier.clone(), token.line),
                 _ => panic!("Checked for identifier, but now advance() doesn't return identifier?"),
             }))
         } else {
@@ -200,8 +204,32 @@ impl Parser {
     {
         let mut expr = next_grammar(self)?;
 
+        // TODO: Is there a better way to do alignment?
+        // Panic isn't bad since it's more like "it should be impossible to see this",
+        // but we could still make it more robust by reporting a syntax error, even if we
+        // think it would be impossible to ever observe. Would love to make it unrepresentable,
+        // though!
         while self.matches_token(targets) {
             let operator = self.previous().expect("Empty previous even after advancing?").clone();
+            let line = operator.line;
+            let op: BinaryOp = match operator.token_type {
+                TokenType::Comma => BinaryOp::Comma,
+                TokenType::Minus => BinaryOp::Minus,
+                TokenType::Plus => BinaryOp::Plus,
+                TokenType::Slash => BinaryOp::Slash,
+                TokenType::Star => BinaryOp::Star,
+                TokenType::BangEqual => BinaryOp::BangEqual,
+                TokenType::EqualEqual => BinaryOp::EqualEqual,
+                TokenType::Greater => BinaryOp::Greater,
+                TokenType::GreaterEqual => BinaryOp::GreaterEqual,
+                TokenType::Less => BinaryOp::Less,
+                TokenType::LessEqual => BinaryOp::LessEqual,
+                _ => panic!(
+                    "Expected binary operator: checked for {:?}, got {:?}",
+                    targets, operator.token_type
+                ),
+            };
+            let operator: BinaryToken = BinaryToken::new(op, line);
             let right = next_grammar(self)?;
             expr = Binary::lift(expr, operator, right)
         }
@@ -288,8 +316,19 @@ impl Parser {
     }
 
     fn unary(&mut self) -> EResult {
-        if self.matches_token(&[TokenType::Bang, TokenType::Minus]) {
+        let unary_token_types = [TokenType::Bang, TokenType::Minus];
+        if self.matches_token(&unary_token_types) {
             let operator = self.previous().expect("Empty previous even after advancing?").clone();
+            let line = operator.line;
+            let op: UnaryOp = match operator.token_type {
+                TokenType::Bang => UnaryOp::Bang,
+                TokenType::Minus => UnaryOp::Minus,
+                _ => panic!(
+                    "Expected unary operator: checked for {:?}, got {:?}",
+                    unary_token_types, operator.token_type
+                ),
+            };
+            let operator: UnaryToken = UnaryToken::new(op, line);
             let expression = self.unary()?;
             Ok(Unary::lift(operator, expression))
         } else {
@@ -301,24 +340,28 @@ impl Parser {
         // let mut binary_op_error_production = ||
 
         if self.matches_token(&[TokenType::False]) {
-            Ok(Literal::lift(TokenType::False))
+            Ok(LiteralExpr::lift(ParsedLiteral::False))
         } else if self.matches_token(&[TokenType::True]) {
-            Ok(Literal::lift(TokenType::True))
+            Ok(LiteralExpr::lift(ParsedLiteral::True))
         } else if self.matches_token(&[TokenType::Nil]) {
-            Ok(Literal::lift(TokenType::Nil))
+            Ok(LiteralExpr::lift(ParsedLiteral::Nil))
         } else if self.matches_token(&[TokenType::Number(0.0), TokenType::String(String::new())]) {
             // Note the 0.0 and String::new() values don't matter.
             // See implementation of matches_token for more.
-            Ok(Literal::lift(
-                self.previous().expect("Empty previous even after advancing?").token_type.clone(),
-            ))
-        } else if self.matches_token(&[TokenType::Identifier(Identifier(String::new()))]) {
+            let token_type = &self.previous().expect("Empty previous even after advancing?").token_type;
+            match &token_type {
+                TokenType::String(s) => Ok(LiteralExpr::lift(ParsedLiteral::String(s.clone()))),
+                TokenType::Number(x) => Ok(LiteralExpr::lift(ParsedLiteral::Number(*x))),
+                _ => {
+                    panic!("Checked for string or number, but now not finding one? Got {:?}", token_type)
+                }
+            }
+        } else if self.matches_token(&[TokenType::Identifier(String::new())]) {
             let prev = self.previous().expect("Empty previous even after advancing?");
             match &prev.token_type {
-                TokenType::Identifier(identifier) => Ok(Variable::lift(IdentifierToken {
-                    identifier: identifier.clone(),
-                    line: prev.line,
-                })),
+                TokenType::Identifier(identifier) => {
+                    Ok(Variable::lift(IdentifierToken::new(identifier.clone(), prev.line)))
+                }
                 _ => panic!("Matched on identifier, but then previous() didn't return identifier"),
             }
         } else if self.matches_token(&[TokenType::LeftParen]) {
@@ -354,21 +397,22 @@ pub(crate) fn parse(tokens: Vec<Token>) -> Result<Vec<Stmt>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scanner::{Token, TokenType, scan_tokens};
+    use crate::scanner::scan_tokens;
 
-    fn make_token(token_type: TokenType) -> Token {
-        Token {
-            line: 1,
-            token_type,
-        }
+    fn unary_token(op: UnaryOp) -> UnaryToken {
+        UnaryToken::new(op, 1)
+    }
+
+    fn binary_token(op: BinaryOp) -> BinaryToken {
+        BinaryToken::new(op, 1)
     }
 
     fn literal_num(n: f64) -> Expr {
-        Literal::lift(TokenType::Number(n))
+        LiteralExpr::lift(ParsedLiteral::Number(n))
     }
 
     fn literal_str(s: &str) -> Expr {
-        Literal::lift(TokenType::String(s.to_string()))
+        LiteralExpr::lift(ParsedLiteral::String(s.to_string()))
     }
 
     fn single_expr(expr: Expr) -> Vec<Stmt> {
@@ -392,15 +436,15 @@ mod tests {
     fn test_comma() {
         assert_eq!(
             parse(scan_tokens(&"1, 2;").expect("Error scanning.")).expect("Error parsing."),
-            single_expr(Binary::lift(literal_num(1.0), make_token(TokenType::Comma), literal_num(2.0)))
+            single_expr(Binary::lift(literal_num(1.0), binary_token(BinaryOp::Comma), literal_num(2.0)))
         )
     }
 
     #[test]
     fn test_parse_complex() {
         let expected = single_expr(Binary::lift(
-            Unary::lift(make_token(TokenType::Minus), literal_num(123.0)),
-            make_token(TokenType::Star),
+            Unary::lift(unary_token(UnaryOp::Minus), literal_num(123.0)),
+            binary_token(BinaryOp::Star),
             Grouping::lift(literal_num(45.67)),
         ));
 
@@ -422,8 +466,8 @@ mod tests {
         );
 
         let expected = single_expr(Binary::lift(
-            Unary::lift(make_token(TokenType::Minus), literal_num(123.0)),
-            make_token(TokenType::EqualEqual),
+            Unary::lift(unary_token(UnaryOp::Minus), literal_num(123.0)),
+            binary_token(BinaryOp::EqualEqual),
             Grouping::lift(literal_num(45.67)),
         ));
 

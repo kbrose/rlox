@@ -1,4 +1,4 @@
-use crate::expr::*;
+use crate::ast::*;
 
 #[allow(unused)]
 pub(crate) fn pretty_print_expr(expr: &Expr) -> String {
@@ -7,19 +7,19 @@ pub(crate) fn pretty_print_expr(expr: &Expr) -> String {
             format!(
                 "({} {} {})",
                 pretty_print_expr(&binary.left),
-                binary.operator.token_type.pretty_print(),
+                binary.operator.pretty_print(),
                 pretty_print_expr(&binary.right)
             )
         }
         Expr::Grouping(grouping) => {
             format!("({})", pretty_print_expr(&grouping.expression))
         }
-        Expr::Literal(literal) => literal.value.pretty_print(),
+        Expr::LiteralExpr(literal) => literal.value.pretty_print(),
         Expr::Unary(unary) => {
-            format!("({} {})", unary.operator.token_type.pretty_print(), pretty_print_expr(&unary.expression))
+            format!("({} {})", unary.operator.pretty_print(), pretty_print_expr(&unary.expression))
         }
         Expr::Variable(variable) => {
-            format!("var {}", variable.name.identifier.0)
+            format!("var {}", variable.name.pretty_print())
         }
     }
 }
@@ -28,13 +28,14 @@ pub(crate) fn pretty_print_expr(expr: &Expr) -> String {
 mod tests {
     use super::*;
     use crate::ast_printer::pretty_print_expr;
-    use crate::scanner::{Token, TokenType};
+    use crate::parser::{BinaryOp, BinaryToken, ParsedLiteral, UnaryOp, UnaryToken};
 
-    fn make_token(token_type: TokenType) -> Token {
-        Token {
-            line: 1,
-            token_type,
-        }
+    fn unary_token(op: UnaryOp) -> UnaryToken {
+        UnaryToken::new(op, 1)
+    }
+
+    fn binary_token(op: BinaryOp) -> BinaryToken {
+        BinaryToken::new(op, 1)
     }
 
     fn b<T>(t: T) -> Box<T> {
@@ -45,15 +46,15 @@ mod tests {
     fn test_pretty_print() {
         let exp: Expr = Expr::Binary(b(Binary {
             left: Expr::Unary(b(Unary {
-                operator: make_token(TokenType::Minus),
-                expression: Expr::Literal(b(Literal {
-                    value: TokenType::Number(123.0),
+                operator: unary_token(UnaryOp::Minus),
+                expression: Expr::LiteralExpr(b(LiteralExpr {
+                    value: ParsedLiteral::Number(123.0),
                 })),
             })),
-            operator: make_token(TokenType::Star),
+            operator: binary_token(BinaryOp::Star),
             right: Expr::Grouping(b(Grouping {
-                expression: Expr::Literal(b(Literal {
-                    value: TokenType::Number(45.67),
+                expression: Expr::LiteralExpr(b(LiteralExpr {
+                    value: ParsedLiteral::Number(45.67),
                 })),
             })),
         }));

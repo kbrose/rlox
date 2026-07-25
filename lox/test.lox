@@ -1,3 +1,6 @@
-print "one";
+print "this is a string";
 print true;
 print 2 + 1;
+var x = 5;
+print "x = 5: x * 3 = 15?";
+print x * 3;

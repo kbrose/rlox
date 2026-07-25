@@ -1,23 +1,24 @@
 use std::fmt;
 
 use crate::{
+    ast::{Expr, Stmt},
     environment::Environment,
-    expr::Expr,
-    scanner::{self, Token},
-    stmt::Stmt,
+    scanner::TokenLike,
 };
 use anyhow::{Result as AnyhowResult, anyhow};
 
 #[derive(Debug)]
 pub(crate) struct RuntimeError {
-    token: Token,
+    line: usize,
+    token_display: String,
     message: String,
 }
 
 impl RuntimeError {
-    pub(crate) fn new(token: Token, message: String) -> Self {
+    pub(crate) fn new(token: impl TokenLike, message: String) -> Self {
         Self {
-            token,
+            line: token.line(),
+            token_display: token.token_display(),
             message,
         }
     }
@@ -25,13 +26,7 @@ impl RuntimeError {
 
 impl fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "[Runtime Error line: {}, token: {}] {}",
-            self.token.line,
-            self.token.token_type.pretty_print(),
-            self.message
-        )
+        write!(f, "[Runtime Error line: {}, token: {}] {}", self.line, self.token_display, self.message)
     }
 }
 
@@ -111,14 +106,13 @@ impl Interpreter {
 
     fn evaluate(&self, expr: &Expr) -> Result<LoxValue, RuntimeError> {
         match expr {
-            Expr::Literal(literal) => {
+            Expr::LiteralExpr(literal) => {
                 let out = match &literal.value {
-                    scanner::TokenType::Nil => LoxValue::Nil,
-                    scanner::TokenType::True => LoxValue::Boolean(true),
-                    scanner::TokenType::False => LoxValue::Boolean(false),
-                    scanner::TokenType::String(s) => LoxValue::String(s.clone()),
-                    scanner::TokenType::Number(x) => LoxValue::Number(*x),
-                    _ => panic!("Unexpected token type for literal!"), // TODO: Don't panic, make unrepresentable
+                    crate::parser::ParsedLiteral::Nil => LoxValue::Nil,
+                    crate::parser::ParsedLiteral::True => LoxValue::Boolean(true),
+                    crate::parser::ParsedLiteral::False => LoxValue::Boolean(false),
+                    crate::parser::ParsedLiteral::String(s) => LoxValue::String(s.clone()),
+                    crate::parser::ParsedLiteral::Number(x) => LoxValue::Number(*x),
                 };
                 Ok(out)
             }
@@ -126,15 +120,13 @@ impl Interpreter {
             Expr::Unary(unary) => {
                 let right = self.evaluate(&unary.expression)?;
 
-                let out = match &unary.operator.token_type {
-                    scanner::TokenType::Bang => LoxValue::Boolean(!right.truthiness()),
-                    scanner::TokenType::Minus => {
-                        LoxValue::Number(-right.get_number().map_err(|message| RuntimeError {
-                            token: unary.operator.clone(),
-                            message,
-                        })?)
-                    }
-                    _ => panic!("Unexpected token type for unary!"), // TODO: Don't panic, make unrepresentable
+                let out = match &unary.operator.op() {
+                    crate::parser::UnaryOp::Bang => LoxValue::Boolean(!right.truthiness()),
+                    crate::parser::UnaryOp::Minus => LoxValue::Number(
+                        -right
+                            .get_number()
+                            .map_err(|message| RuntimeError::new(unary.operator.clone(), message))?,
+                    ),
                 };
 
                 Ok(out)
@@ -143,15 +135,16 @@ impl Interpreter {
                 let left = self.evaluate(&binary.left)?;
                 let right = self.evaluate(&binary.right)?;
 
-                let err = |message: String| RuntimeError {
-                    token: binary.operator.clone(),
-                    message,
-                };
-                match binary.operator.token_type {
-                    scanner::TokenType::Minus => Ok(LoxValue::Number(
+                let err = |message: String| RuntimeError::new(binary.operator.clone(), message);
+                //     {
+                //     token: binary.operator.clone(),
+                //     message,
+                // };
+                match binary.operator.op() {
+                    crate::parser::BinaryOp::Minus => Ok(LoxValue::Number(
                         left.get_number().map_err(err)? - right.get_number().map_err(err)?,
                     )),
-                    scanner::TokenType::Plus => {
+                    crate::parser::BinaryOp::Plus => {
                         if let (Ok(l), Ok(r)) = (left.get_number(), right.get_number()) {
                             Ok(LoxValue::Number(l + r))
                         } else if let (Ok(l), Ok(r)) = (left.get_string(), right.get_string()) {
@@ -163,7 +156,7 @@ impl Interpreter {
                             Err(err(String::from("Type error: + with incompatible types")))
                         }
                     }
-                    scanner::TokenType::Slash => {
+                    crate::parser::BinaryOp::Slash => {
                         let right = right.get_number().map_err(err)?;
                         if right == 0.0 {
                             Err(err(String::from("Division by zero")))
@@ -171,23 +164,23 @@ impl Interpreter {
                             Ok(LoxValue::Number(left.get_number().map_err(err)? / right))
                         }
                     }
-                    scanner::TokenType::Star => Ok(LoxValue::Number(
+                    crate::parser::BinaryOp::Star => Ok(LoxValue::Number(
                         left.get_number().map_err(err)? * right.get_number().map_err(err)?,
                     )),
-                    scanner::TokenType::Greater => Ok(LoxValue::Boolean(
+                    crate::parser::BinaryOp::Greater => Ok(LoxValue::Boolean(
                         left.get_number().map_err(err)? > right.get_number().map_err(err)?,
                     )),
-                    scanner::TokenType::GreaterEqual => Ok(LoxValue::Boolean(
+                    crate::parser::BinaryOp::GreaterEqual => Ok(LoxValue::Boolean(
                         left.get_number().map_err(err)? >= right.get_number().map_err(err)?,
                     )),
-                    scanner::TokenType::Less => Ok(LoxValue::Boolean(
+                    crate::parser::BinaryOp::Less => Ok(LoxValue::Boolean(
                         left.get_number().map_err(err)? < right.get_number().map_err(err)?,
                     )),
-                    scanner::TokenType::LessEqual => Ok(LoxValue::Boolean(
+                    crate::parser::BinaryOp::LessEqual => Ok(LoxValue::Boolean(
                         left.get_number().map_err(err)? <= right.get_number().map_err(err)?,
                     )),
-                    scanner::TokenType::BangEqual => Ok(LoxValue::Boolean(!left.is_equal(&right))),
-                    scanner::TokenType::EqualEqual => Ok(LoxValue::Boolean(left.is_equal(&right))),
+                    crate::parser::BinaryOp::BangEqual => Ok(LoxValue::Boolean(!left.is_equal(&right))),
+                    crate::parser::BinaryOp::EqualEqual => Ok(LoxValue::Boolean(left.is_equal(&right))),
                     _ => panic!("Unexpected token type for binary!"), // TODO: Don't panic, make unrepresentable
                 }
             }
@@ -212,7 +205,7 @@ impl Interpreter {
                     Ok(LoxValue::Nil)
                 }?;
 
-                self.environment.define(var.name.identifier.0, value);
+                self.environment.define(&var.name, value);
 
                 Ok(())
             }

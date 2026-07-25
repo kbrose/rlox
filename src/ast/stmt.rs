@@ -1,5 +1,5 @@
-use crate::expr::Expr;
-use crate::scanner::IdentifierToken;
+use crate::ast::Expr;
+use crate::parser::IdentifierToken;
 
 define_ast! {
     Stmt {
