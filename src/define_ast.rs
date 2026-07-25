@@ -16,8 +16,8 @@ macro_rules! define_ast {
             }
 
             impl $struct_name {
-                pub(crate) fn to_expr( $($field_name: $field_type, )+ ) -> Expr {
-                    Expr::$struct_name(Box::new($struct_name{ $($field_name, )+ }))
+                pub(crate) fn lift( $($field_name: $field_type, )+ ) -> $enum_name {
+                    $enum_name::$struct_name(Box::new($struct_name{ $($field_name, )+ }))
                 }
             }
         )*

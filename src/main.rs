@@ -13,6 +13,7 @@ mod expr;
 mod interpreter;
 mod parser;
 mod scanner;
+mod stmt;
 
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -65,14 +66,12 @@ fn run(source: &str) -> Result<()> {
         Instant::now()
     };
 
-    let expression = parser::parse(tokens)?;
+    let statements = parser::parse(tokens)?;
 
     #[cfg(feature = "timings")]
     println!("Parsing : {:?}", parsing_timer.elapsed());
 
-    let interpreted = interpreter::interpret_expr(&expression)?;
-
-    println!("{interpreted}");
+    interpreter::interpret(statements)?;
 
     Ok(())
 }

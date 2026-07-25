@@ -1,8 +1,9 @@
 use std::fmt;
 
 use crate::{
-    expr::*,
+    expr::Expr,
     scanner::{self, Token},
+    stmt::Stmt,
 };
 use anyhow::{Result as AnyhowResult, anyhow};
 
@@ -87,7 +88,7 @@ impl LoxValue {
     }
 }
 
-fn interpret(expr: &Expr) -> Result<LoxValue, RuntimeError> {
+fn evaluate(expr: &Expr) -> Result<LoxValue, RuntimeError> {
     match expr {
         Expr::Literal(literal) => {
             let out = match &literal.value {
@@ -100,9 +101,9 @@ fn interpret(expr: &Expr) -> Result<LoxValue, RuntimeError> {
             };
             Ok(out)
         }
-        Expr::Grouping(grouping) => interpret(&grouping.expression),
+        Expr::Grouping(grouping) => evaluate(&grouping.expression),
         Expr::Unary(unary) => {
-            let right = interpret(&unary.expression)?;
+            let right = evaluate(&unary.expression)?;
 
             let out = match &unary.operator.token_type {
                 scanner::TokenType::Bang => LoxValue::Boolean(!right.truthiness()),
@@ -118,8 +119,8 @@ fn interpret(expr: &Expr) -> Result<LoxValue, RuntimeError> {
             Ok(out)
         }
         Expr::Binary(binary) => {
-            let left = interpret(&binary.left)?;
-            let right = interpret(&binary.right)?;
+            let left = evaluate(&binary.left)?;
+            let right = evaluate(&binary.right)?;
 
             let err = |message: String| RuntimeError {
                 token: binary.operator.clone(),
@@ -172,15 +173,30 @@ fn interpret(expr: &Expr) -> Result<LoxValue, RuntimeError> {
     }
 }
 
+fn execute_stmt(stmt: Stmt) -> Result<(), RuntimeError> {
+    match stmt {
+        Stmt::StmtExpression(stmt_expression) => {
+            evaluate(&stmt_expression.expression)?;
+            Ok(())
+        }
+        Stmt::Print(print) => {
+            println!("{}", evaluate(&print.expression)?);
+            Ok(())
+        }
+    }
+}
+
 // This will have to be converted into an Interpreter struct once we have global vars
 // that should be preserved across runs in the REPL. Or alternatively, some kind of
 // &mut Globals passed in or something like that.
-pub(crate) fn interpret_expr(expr: &Expr) -> AnyhowResult<LoxValue> {
-    let out = interpret(expr);
-    if let Err(ref e) = out {
-        eprintln!("{e}");
+pub(crate) fn interpret(stmts: Vec<Stmt>) -> AnyhowResult<()> {
+    for stmt in stmts {
+        execute_stmt(stmt).map_err(|e| {
+            eprintln!("{e}");
+            anyhow!("")
+        })?;
     }
-    out.map_err(|_| anyhow!(""))
+    Ok(())
 }
 
 #[cfg(test)]
@@ -189,8 +205,19 @@ mod tests {
 
     use super::*;
 
-    fn interpret_str(s: &str) -> Result<LoxValue, RuntimeError> {
-        interpret(&parse(scan_tokens(s).expect("scan error")).expect("parse error"))
+    fn execute_str(s: &str) -> Result<LoxValue, RuntimeError> {
+        let mut with_semicolon = String::with_capacity(s.len() + 1);
+        with_semicolon.push_str(s);
+        with_semicolon.push(';');
+        let parsed = parse(scan_tokens(&with_semicolon).expect("scan error")).expect("parse error");
+        assert!(parsed.len() == 1);
+        match parsed.first().unwrap() {
+            Stmt::StmtExpression(stmt_expression) => evaluate(&stmt_expression.expression),
+            Stmt::Print(_) => {
+                panic!("Expected statement expression")
+            }
+        }
+        // interpret_expr(&)
     }
 
     fn number(x: f64) -> LoxValue {
@@ -209,58 +236,58 @@ mod tests {
 
     #[test]
     fn test_literals() {
-        assert_eq!(interpret_str("1").expect(INTER_ERR), number(1.0));
-        assert_eq!(interpret_str("(1)").expect(INTER_ERR), number(1.0));
-        assert_eq!(interpret_str("false").expect(INTER_ERR), boolean(false));
-        assert_eq!(interpret_str("true").expect(INTER_ERR), boolean(true));
-        assert_eq!(interpret_str(r#""asdf""#).expect(INTER_ERR), string("asdf"));
+        assert_eq!(execute_str("1").expect(INTER_ERR), number(1.0));
+        assert_eq!(execute_str("(1)").expect(INTER_ERR), number(1.0));
+        assert_eq!(execute_str("false").expect(INTER_ERR), boolean(false));
+        assert_eq!(execute_str("true").expect(INTER_ERR), boolean(true));
+        assert_eq!(execute_str(r#""asdf""#).expect(INTER_ERR), string("asdf"));
     }
 
     #[test]
     fn test_unary() {
-        assert_eq!(interpret_str("!true").expect(INTER_ERR), boolean(false));
-        assert_eq!(interpret_str("!false").expect(INTER_ERR), boolean(true));
-        assert_eq!(interpret_str("!5").expect(INTER_ERR), boolean(false));
-        assert_eq!(interpret_str("!nil").expect(INTER_ERR), boolean(true));
-        assert_eq!(interpret_str("!!nil").expect(INTER_ERR), boolean(false));
+        assert_eq!(execute_str("!true").expect(INTER_ERR), boolean(false));
+        assert_eq!(execute_str("!false").expect(INTER_ERR), boolean(true));
+        assert_eq!(execute_str("!5").expect(INTER_ERR), boolean(false));
+        assert_eq!(execute_str("!nil").expect(INTER_ERR), boolean(true));
+        assert_eq!(execute_str("!!nil").expect(INTER_ERR), boolean(false));
 
-        assert_eq!(interpret_str("-5").expect(INTER_ERR), number(-5.0));
-        assert!(interpret_str(r#"-"asdf""#).is_err());
+        assert_eq!(execute_str("-5").expect(INTER_ERR), number(-5.0));
+        assert!(execute_str(r#"-"asdf""#).is_err());
     }
 
     #[test]
     fn test_binary() {
-        assert_eq!(interpret_str("1 / 2").expect(INTER_ERR), number(0.5));
-        assert_eq!(interpret_str("1 - 1").expect(INTER_ERR), number(0.0));
-        assert_eq!(interpret_str("3 * 5").expect(INTER_ERR), number(15.0));
-        assert_eq!(interpret_str("\"Hello \" + \"World\"").expect(INTER_ERR), string("Hello World"));
+        assert_eq!(execute_str("1 / 2").expect(INTER_ERR), number(0.5));
+        assert_eq!(execute_str("1 - 1").expect(INTER_ERR), number(0.0));
+        assert_eq!(execute_str("3 * 5").expect(INTER_ERR), number(15.0));
+        assert_eq!(execute_str("\"Hello \" + \"World\"").expect(INTER_ERR), string("Hello World"));
 
-        assert_eq!(interpret_str("1 == 1").expect(INTER_ERR), boolean(true));
-        assert_eq!(interpret_str("1 != 1").expect(INTER_ERR), boolean(false));
-        assert_eq!(interpret_str("1 == 2").expect(INTER_ERR), boolean(false));
-        assert_eq!(interpret_str("1 != 2").expect(INTER_ERR), boolean(true));
+        assert_eq!(execute_str("1 == 1").expect(INTER_ERR), boolean(true));
+        assert_eq!(execute_str("1 != 1").expect(INTER_ERR), boolean(false));
+        assert_eq!(execute_str("1 == 2").expect(INTER_ERR), boolean(false));
+        assert_eq!(execute_str("1 != 2").expect(INTER_ERR), boolean(true));
 
-        assert_eq!(interpret_str("0 < 1").expect(INTER_ERR), boolean(true));
-        assert_eq!(interpret_str("1 < 1").expect(INTER_ERR), boolean(false));
-        assert_eq!(interpret_str("1 <= 1").expect(INTER_ERR), boolean(true));
-        assert_eq!(interpret_str("1 > 2").expect(INTER_ERR), boolean(false));
-        assert_eq!(interpret_str("1 >= 2").expect(INTER_ERR), boolean(false));
-        assert_eq!(interpret_str("2 >= 2").expect(INTER_ERR), boolean(true));
+        assert_eq!(execute_str("0 < 1").expect(INTER_ERR), boolean(true));
+        assert_eq!(execute_str("1 < 1").expect(INTER_ERR), boolean(false));
+        assert_eq!(execute_str("1 <= 1").expect(INTER_ERR), boolean(true));
+        assert_eq!(execute_str("1 > 2").expect(INTER_ERR), boolean(false));
+        assert_eq!(execute_str("1 >= 2").expect(INTER_ERR), boolean(false));
+        assert_eq!(execute_str("2 >= 2").expect(INTER_ERR), boolean(true));
 
-        assert_eq!(interpret_str(r#""asdf" == "asdf""#).expect(INTER_ERR), boolean(true));
-        assert_eq!(interpret_str(r#""asdf" != "asdf""#).expect(INTER_ERR), boolean(false));
-        assert_eq!(interpret_str(r#""asdf" == "wxyz""#).expect(INTER_ERR), boolean(false));
-        assert_eq!(interpret_str(r#""asdf" != "wxyz""#).expect(INTER_ERR), boolean(true));
+        assert_eq!(execute_str(r#""asdf" == "asdf""#).expect(INTER_ERR), boolean(true));
+        assert_eq!(execute_str(r#""asdf" != "asdf""#).expect(INTER_ERR), boolean(false));
+        assert_eq!(execute_str(r#""asdf" == "wxyz""#).expect(INTER_ERR), boolean(false));
+        assert_eq!(execute_str(r#""asdf" != "wxyz""#).expect(INTER_ERR), boolean(true));
     }
 
     #[test]
     fn test_complex() {
-        assert_eq!(interpret_str("(1 / 2) * 2").expect(INTER_ERR), number(1.0));
-        assert_eq!(interpret_str("(1 + 2) * 5").expect(INTER_ERR), number(15.0));
-        assert_eq!(interpret_str("(1 + 2) * -5").expect(INTER_ERR), number(-15.0));
-        assert_eq!(interpret_str("1 + (2 * 5)").expect(INTER_ERR), number(11.0));
-        assert_eq!(interpret_str("1 + (2 * 5) < (1 + 2) * 5").expect(INTER_ERR), boolean(true));
-        assert_eq!(interpret_str(r#"!(("s1" == "s2") == nil)"#).expect(INTER_ERR), boolean(true));
+        assert_eq!(execute_str("(1 / 2) * 2").expect(INTER_ERR), number(1.0));
+        assert_eq!(execute_str("(1 + 2) * 5").expect(INTER_ERR), number(15.0));
+        assert_eq!(execute_str("(1 + 2) * -5").expect(INTER_ERR), number(-15.0));
+        assert_eq!(execute_str("1 + (2 * 5)").expect(INTER_ERR), number(11.0));
+        assert_eq!(execute_str("1 + (2 * 5) < (1 + 2) * 5").expect(INTER_ERR), boolean(true));
+        assert_eq!(execute_str(r#"!(("s1" == "s2") == nil)"#).expect(INTER_ERR), boolean(true));
 
         for i in 1..20 {
             let mut s = String::new();
@@ -269,17 +296,17 @@ mod tests {
             }
             s.push_str("nil");
 
-            assert_eq!(interpret_str(&s).expect(INTER_ERR), boolean((i % 2) == 1));
+            assert_eq!(execute_str(&s).expect(INTER_ERR), boolean((i % 2) == 1));
         }
     }
 
     #[test]
     fn test_runtime_errors() {
-        assert!(interpret_str("1 * false").is_err());
-        assert!(interpret_str("true * false").is_err());
-        assert!(interpret_str("-true").is_err());
-        assert!(interpret_str("1 < false").is_err());
-        assert!(interpret_str("1 / 0").is_err());
-        assert!(interpret_str(r#"-"String""#).is_err());
+        assert!(execute_str("1 * false").is_err());
+        assert!(execute_str("true * false").is_err());
+        assert!(execute_str("-true").is_err());
+        assert!(execute_str("1 < false").is_err());
+        assert!(execute_str("1 / 0").is_err());
+        assert!(execute_str(r#"-"String""#).is_err());
     }
 }

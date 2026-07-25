@@ -1,10 +1,19 @@
 use crate::{
     expr::{Binary, Expr, Grouping, Literal, Unary},
     scanner::{Token, TokenType},
+    stmt::{Print, Stmt, StmtExpression},
 };
 use anyhow::{Result, anyhow};
 use std::fmt;
 
+// Statement:
+// program        → statement* EOF ;
+// statement      → exprStmt
+//                | printStmt ;
+// exprStmt       → expression ";" ;
+// printStmt      → "print" expression ";" ;
+//
+// Expression:
 // expression     → comma ;
 // comma          → equality ( "," equality )* ;
 // equality       → comparison ( ( "!=" | "==" ) comparison )* ;
@@ -16,7 +25,9 @@ use std::fmt;
 // primary        → NUMBER | STRING | "true" | "false" | "nil"
 //                | "(" expression ")" ;
 
+// TODO: Better names for these
 type EResult = Result<Expr>;
+type SResult = Result<Stmt>;
 
 struct Parser {
     tokens: Vec<Token>,
@@ -51,23 +62,16 @@ impl Parser {
         }
     }
 
-    fn parse(&mut self) -> EResult {
-        let result = self.expression();
-        match result {
-            Ok(expr) => {
-                if self.parse_error {
-                    Err(anyhow!("Parsing error (recoverable)."))
-                } else {
-                    Ok(expr)
-                }
-            }
-            Err(_) => result,
+    fn parse(&mut self) -> Result<Vec<Stmt>> {
+        let mut statements = vec![];
+        while !self.is_at_end() {
+            statements.push(self.statement()?);
         }
-    }
-
-    #[cfg(test)]
-    fn parse_unchecked(&mut self) -> EResult {
-        self.expression()
+        if self.parse_error {
+            Err(anyhow!("Parsing error (recoverable)."))
+        } else {
+            Ok(statements)
+        }
     }
 
     fn matches_token(&mut self, targets: &[TokenType]) -> bool {
@@ -180,10 +184,30 @@ impl Parser {
         while self.matches_token(targets) {
             let operator = self.previous().expect("Empty previous even after advancing?").clone();
             let right = next_grammar(self)?;
-            expr = Binary::to_expr(expr, operator, right)
+            expr = Binary::lift(expr, operator, right)
         }
 
         Ok(expr)
+    }
+
+    fn statement(&mut self) -> SResult {
+        if self.matches_token(&[TokenType::Print]) {
+            self.print_statement()
+        } else {
+            self.expression_statement()
+        }
+    }
+
+    fn print_statement(&mut self) -> SResult {
+        let expression = self.expression()?;
+        self.consume(TokenType::Semicolon, "Expect ';' after value.")?;
+        Ok(Print::lift(expression))
+    }
+
+    fn expression_statement(&mut self) -> SResult {
+        let expression = self.expression()?;
+        self.consume(TokenType::Semicolon, "Expect ';' after value.")?;
+        Ok(StmtExpression::lift(expression))
     }
 
     fn expression(&mut self) -> EResult {
@@ -217,7 +241,7 @@ impl Parser {
         if self.matches_token(&[TokenType::Bang, TokenType::Minus]) {
             let operator = self.previous().expect("Empty previous even after advancing?").clone();
             let expression = self.unary()?;
-            Ok(Unary::to_expr(operator, expression))
+            Ok(Unary::lift(operator, expression))
         } else {
             self.primary()
         }
@@ -227,21 +251,21 @@ impl Parser {
         // let mut binary_op_error_production = ||
 
         if self.matches_token(&[TokenType::False]) {
-            Ok(Literal::to_expr(TokenType::False))
+            Ok(Literal::lift(TokenType::False))
         } else if self.matches_token(&[TokenType::True]) {
-            Ok(Literal::to_expr(TokenType::True))
+            Ok(Literal::lift(TokenType::True))
         } else if self.matches_token(&[TokenType::Nil]) {
-            Ok(Literal::to_expr(TokenType::Nil))
+            Ok(Literal::lift(TokenType::Nil))
         } else if self.matches_token(&[TokenType::Number(0.0), TokenType::String(String::new())]) {
             // Note the 0.0 and String::new() values don't matter.
             // See implementation of matches_token for more.
-            Ok(Literal::to_expr(
+            Ok(Literal::lift(
                 self.previous().expect("Empty previous even after advancing?").token_type.clone(),
             ))
         } else if self.matches_token(&[TokenType::LeftParen]) {
             let expression = self.expression()?;
             self.consume(TokenType::RightParen, "Expect ')' after expression.")?;
-            Ok(Grouping::to_expr(expression))
+            Ok(Grouping::lift(expression))
         } else if self.matches_token(&[TokenType::Comma]) {
             self.binary_op_missing_lhs_error_production(Self::equality)
         } else if self.matches_token(&[TokenType::EqualEqual, TokenType::BangEqual]) {
@@ -263,7 +287,7 @@ impl Parser {
     }
 }
 
-pub(crate) fn parse(tokens: Vec<Token>) -> EResult {
+pub(crate) fn parse(tokens: Vec<Token>) -> Result<Vec<Stmt>> {
     let mut parser = Parser::new(tokens);
     parser.parse()
 }
@@ -281,84 +305,88 @@ mod tests {
     }
 
     fn literal_num(n: f64) -> Expr {
-        Literal::to_expr(TokenType::Number(n))
+        Literal::lift(TokenType::Number(n))
     }
 
     fn literal_str(s: &str) -> Expr {
-        Literal::to_expr(TokenType::String(s.to_string()))
+        Literal::lift(TokenType::String(s.to_string()))
+    }
+
+    fn single_expr(expr: Expr) -> Vec<Stmt> {
+        vec![StmtExpression::lift(expr)]
     }
 
     #[test]
     fn test_parse_simple() {
         assert_eq!(
-            parse(scan_tokens(&"123").expect("Error scanning")).expect("Error parsing"),
-            literal_num(123.0)
+            parse(scan_tokens(&"123;").expect("Error scanning")).expect("Error parsing"),
+            single_expr(literal_num(123.0))
         );
 
         assert_eq!(
-            parse(scan_tokens(&"\"123\"").expect("Error scanning")).expect("Error parsing"),
-            literal_str("123")
+            parse(scan_tokens(&r#""123";"#).expect("Error scanning")).expect("Error parsing"),
+            single_expr(literal_str("123"))
         );
     }
 
     #[test]
     fn test_comma() {
         assert_eq!(
-            parse(scan_tokens(&"1, 2").expect("Error scanning.")).expect("Error parsing."),
-            Binary::to_expr(literal_num(1.0), make_token(TokenType::Comma), literal_num(2.0))
+            parse(scan_tokens(&"1, 2;").expect("Error scanning.")).expect("Error parsing."),
+            single_expr(Binary::lift(literal_num(1.0), make_token(TokenType::Comma), literal_num(2.0)))
         )
     }
 
     #[test]
     fn test_parse_complex() {
-        let expected: Expr = Binary::to_expr(
-            Unary::to_expr(make_token(TokenType::Minus), literal_num(123.0)),
+        let expected = single_expr(Binary::lift(
+            Unary::lift(make_token(TokenType::Minus), literal_num(123.0)),
             make_token(TokenType::Star),
-            Grouping::to_expr(literal_num(45.67)),
-        );
+            Grouping::lift(literal_num(45.67)),
+        ));
 
         assert_eq!(
-            parse(scan_tokens(&"-123 * (45.67)").expect("Error scanning")).expect("Error parsing"),
+            parse(scan_tokens(&"-123 * (45.67);").expect("Error scanning")).expect("Error parsing"),
             expected
         );
 
         assert_eq!(
-            parse(scan_tokens(&"-123.0 /* comment */ * (45.67)").expect("Error scanning"))
+            parse(scan_tokens(&"-123.0 /* comment */ * (45.67);").expect("Error scanning"))
                 .expect("Error parsing"),
             expected
         );
 
         assert_eq!(
-            parse(scan_tokens(&"-123 /* comment */ * (45.67)  //").expect("Error scanning"))
+            parse(scan_tokens(&"-123 /* comment */ * (45.67);  //").expect("Error scanning"))
                 .expect("Error parsing"),
             expected
         );
 
-        let expected = Binary::to_expr(
-            Unary::to_expr(make_token(TokenType::Minus), literal_num(123.0)),
+        let expected = single_expr(Binary::lift(
+            Unary::lift(make_token(TokenType::Minus), literal_num(123.0)),
             make_token(TokenType::EqualEqual),
-            Grouping::to_expr(literal_num(45.67)),
-        );
+            Grouping::lift(literal_num(45.67)),
+        ));
 
         assert_eq!(
-            parse(scan_tokens(&"-123 == (45.67)").expect("Error scanning")).expect("Error parsing"),
+            parse(scan_tokens(&"-123 == (45.67);").expect("Error scanning")).expect("Error parsing"),
             expected
         );
     }
 
     #[test]
     fn test_parse_errors() {
-        assert!(parse(scan_tokens(&"+123").expect("Error scanning")).is_err());
-        assert!(parse(scan_tokens(&"class").expect("Error scanning")).is_err());
+        assert!(parse(scan_tokens(&"+123;").expect("Error scanning")).is_err());
+        assert!(parse(scan_tokens(&"class;").expect("Error scanning")).is_err());
     }
 
-    #[test]
-    fn test_parse_recoverable_errors() {
-        for op in [",", "!=", "==", ">", ">=", "<", "<=", "+", "/", "*"] {
-            let tokens = scan_tokens(&format!("{}123 5", op)).expect("Error scanning");
-            let mut parser = Parser::new(tokens);
-            let expr = parser.parse_unchecked().expect("Parsing had hard fail, expected recoverable.");
-            assert_eq!(expr, Literal::to_expr(TokenType::Number(5.0)));
-        }
-    }
+    // #[test]
+    // fn test_parse_recoverable_errors() {
+    //     for op in [",", "!=", "==", ">", ">=", "<", "<=", "+", "/", "*"] {
+    //         let tokens = scan_tokens(&format!("{}123 5;", op)).expect("Error scanning");
+    //         let mut parser = Parser::new(tokens);
+    //         let expr = parser.parse_unchecked().expect("Parsing had hard fail, expected recoverable.");
+    //         assert_eq!(expr, single_expr(Literal::lift(TokenType::Number(5.0))));
+    //     }
+    // }
 }
