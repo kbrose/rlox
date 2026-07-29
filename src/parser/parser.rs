@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use crate::{
     ast::{
         Assign, Binary, Block, Expr, Grouping, LiteralExpr, Print, Stmt, StmtExpression, Unary, Var, Variable,
@@ -41,10 +43,11 @@ type SResult = Result<Stmt, ParserError>;
 // primary        → NUMBER | STRING | "true" | "false" | "nil"
 //                | "(" expression ")" ;
 //                | IDENTIFIER
-struct Parser {
-    tokens: Vec<Token>,
+struct Parser<'a, W: Write> {
+    tokens: &'a [Token],
     current: usize,
     parse_error: bool,
+    error_writer: &'a mut W,
 }
 
 #[derive(Debug)]
@@ -62,16 +65,13 @@ impl std::error::Error for ParserError {
     }
 }
 
-fn error(line: usize, token_str: String, message: &str) {
-    eprintln!("[Parse Error line: {}, token: {}] {}", line, token_str, message);
-}
-
-impl Parser {
-    pub(crate) fn new(tokens: Vec<Token>) -> Self {
+impl<'a, W: Write> Parser<'a, W> {
+    pub(crate) fn new(tokens: &'a [Token], error_writer: &'a mut W) -> Self {
         Parser {
             tokens,
             current: 0,
             parse_error: false,
+            error_writer,
         }
     }
 
@@ -85,6 +85,11 @@ impl Parser {
         } else {
             Ok(statements)
         }
+    }
+
+    fn error(&mut self, line: usize, token_str: String, message: &str) {
+        writeln!(self.error_writer, "[Parse Error line: {}, token: {}] {}", line, token_str, message)
+            .expect("Error writing error...");
     }
 
     // TODO: It would be nice if this returned Option<...>: the item that passed the .check()
@@ -138,7 +143,7 @@ impl Parser {
             Ok(self.advance())
         } else {
             let token = self.peek();
-            error(token.line, token.token_type.pretty_print(), message);
+            self.error(token.line, token.token_type.pretty_print(), message);
             Err(ParserError {})
         }
     }
@@ -151,7 +156,7 @@ impl Parser {
             }))
         } else {
             let token = self.peek();
-            error(token.line, token.token_type.pretty_print(), message);
+            self.error(token.line, token.token_type.pretty_print(), message);
             Err(ParserError {})
         }
     }
@@ -190,7 +195,7 @@ impl Parser {
         F: FnMut(&mut Self) -> EResult,
     {
         let token = self.peek();
-        error(token.line, token.token_type.pretty_print(), "Expected expression, found binary operator");
+        self.error(token.line, token.token_type.pretty_print(), "Expected expression, found binary operator");
         // Throwaway the extra RHS. Forward the hard error if there was one.
         let _ = next_grammar(self)?;
         self.expression() // Restart at the bottom of the hierarchy.
@@ -322,7 +327,7 @@ impl Parser {
                     return Ok(Assign::lift(name, value));
                 }
                 _ => {
-                    error(line, token_str, "Invalid assignment target.");
+                    self.error(line, token_str, "Invalid assignment target.");
                 }
             }
         }
@@ -423,15 +428,51 @@ impl Parser {
             self.binary_op_missing_lhs_error_production(Self::unary)
         } else {
             let token = self.peek();
-            error(token.line, token.token_type.pretty_print(), "Expected expression.");
+            self.error(token.line, token.token_type.pretty_print(), "Expected expression.");
             Err(ParserError {})
         }
     }
 }
 
-pub(crate) fn parse(tokens: Vec<Token>) -> Result<Vec<Stmt>, ParserError> {
-    let mut parser = Parser::new(tokens);
+pub(crate) fn parse<W: Write>(tokens: Vec<Token>, mut error_writer: W) -> Result<Vec<Stmt>, ParserError> {
+    let mut parser = Parser::new(&tokens, &mut error_writer);
     parser.parse()
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum ReplParseOutput {
+    Statements(Vec<Stmt>),
+    Expr(Expr),
+}
+
+pub(crate) fn parse_for_repl<W: Write>(
+    tokens: Vec<Token>,
+    mut error_writer: W,
+) -> Result<ReplParseOutput, ParserError> {
+    let mut statement_parsing_errors = vec![];
+    // let mut parser = Parser::new(&tokens, &mut statement_parsing_errors);
+    match Parser::new(&tokens, &mut statement_parsing_errors).parse() {
+        Ok(statements) => Ok(ReplParseOutput::Statements(statements)),
+        Err(statement_error) => {
+            let mut sink = std::io::sink();
+            let mut parser = Parser::new(&tokens, &mut sink);
+            let attempted_expression = parser.expression();
+            if let Ok(expr) = attempted_expression
+                && parser.is_at_end()
+            {
+                Ok(ReplParseOutput::Expr(expr))
+            } else {
+                write!(
+                    error_writer,
+                    "{}",
+                    String::from_utf8(statement_parsing_errors)
+                        .expect("Error re-reading error message as utf8")
+                )
+                .expect("Error writing error.");
+                Err(statement_error)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -462,12 +503,13 @@ mod tests {
     #[test]
     fn test_parse_simple() {
         assert_eq!(
-            parse(scan_tokens(&"123;").expect("Error scanning")).expect("Error parsing"),
+            parse(scan_tokens(&"123;").expect("Error scanning"), std::io::stderr()).expect("Error parsing"),
             single_expr(literal_num(123.0))
         );
 
         assert_eq!(
-            parse(scan_tokens(&r#""123";"#).expect("Error scanning")).expect("Error parsing"),
+            parse(scan_tokens(&r#""123";"#).expect("Error scanning"), std::io::stderr())
+                .expect("Error parsing"),
             single_expr(literal_str("123"))
         );
     }
@@ -475,7 +517,8 @@ mod tests {
     #[test]
     fn test_comma() {
         assert_eq!(
-            parse(scan_tokens(&"1, 2;").expect("Error scanning.")).expect("Error parsing."),
+            parse(scan_tokens(&"1, 2;").expect("Error scanning."), std::io::stderr())
+                .expect("Error parsing."),
             single_expr(Binary::lift(literal_num(1.0), binary_token(BinaryOp::Comma), literal_num(2.0)))
         )
     }
@@ -489,19 +532,26 @@ mod tests {
         ));
 
         assert_eq!(
-            parse(scan_tokens(&"-123 * (45.67);").expect("Error scanning")).expect("Error parsing"),
-            expected
-        );
-
-        assert_eq!(
-            parse(scan_tokens(&"-123.0 /* comment */ * (45.67);").expect("Error scanning"))
+            parse(scan_tokens(&"-123 * (45.67);").expect("Error scanning"), std::io::stderr())
                 .expect("Error parsing"),
             expected
         );
 
         assert_eq!(
-            parse(scan_tokens(&"-123 /* comment */ * (45.67);  //").expect("Error scanning"))
-                .expect("Error parsing"),
+            parse(
+                scan_tokens(&"-123.0 /* comment */ * (45.67);").expect("Error scanning"),
+                std::io::stderr()
+            )
+            .expect("Error parsing"),
+            expected
+        );
+
+        assert_eq!(
+            parse(
+                scan_tokens(&"-123 /* comment */ * (45.67);  //").expect("Error scanning"),
+                std::io::stderr()
+            )
+            .expect("Error parsing"),
             expected
         );
 
@@ -512,24 +562,61 @@ mod tests {
         ));
 
         assert_eq!(
-            parse(scan_tokens(&"-123 == (45.67);").expect("Error scanning")).expect("Error parsing"),
+            parse(scan_tokens(&"-123 == (45.67);").expect("Error scanning"), std::io::stderr())
+                .expect("Error parsing"),
             expected
         );
     }
 
     #[test]
     fn test_parse_errors() {
-        assert!(parse(scan_tokens(&"+123;").expect("Error scanning")).is_err());
-        assert!(parse(scan_tokens(&"class;").expect("Error scanning")).is_err());
+        assert!(parse(scan_tokens(&"+123;").expect("Error scanning"), std::io::stderr()).is_err());
+        assert!(parse(scan_tokens(&"class;").expect("Error scanning"), std::io::stderr()).is_err());
     }
 
-    // #[test]
-    // fn test_parse_recoverable_errors() {
-    //     for op in [",", "!=", "==", ">", ">=", "<", "<=", "+", "/", "*"] {
-    //         let tokens = scan_tokens(&format!("{}123 5;", op)).expect("Error scanning");
-    //         let mut parser = Parser::new(tokens);
-    //         let expr = parser.parse_unchecked().expect("Parsing had hard fail, expected recoverable.");
-    //         assert_eq!(expr, single_expr(Literal::lift(TokenType::Number(5.0))));
-    //     }
-    // }
+    #[test]
+    fn test_statement() {
+        let parsed = parse(scan_tokens(&"var x = 5;").expect("Error scanning"), std::io::stderr())
+            .expect("Error parsing");
+        assert_eq!(
+            vec![Var::lift(
+                IdentifierToken::new("x".into(), 1),
+                Some(LiteralExpr::lift(ParsedLiteral::Number(5.0)))
+            )],
+            parsed
+        );
+
+        let parsed =
+            parse(scan_tokens(&"var x;").expect("Error scanning"), std::io::stderr()).expect("Error parsing");
+        assert_eq!(vec![Var::lift(IdentifierToken::new("x".into(), 1), None)], parsed);
+    }
+
+    #[test]
+    fn test_statements() {
+        let parsed = parse(scan_tokens(&"var x = 5; print x;").expect("Error scanning"), std::io::stderr())
+            .expect("Error parsing");
+        assert_eq!(
+            vec![
+                Var::lift(
+                    IdentifierToken::new("x".into(), 1),
+                    Some(LiteralExpr::lift(ParsedLiteral::Number(5.0)))
+                ),
+                Print::lift(Variable::lift(IdentifierToken::new("x".into(), 1)))
+            ],
+            parsed
+        );
+    }
+
+    #[test]
+    fn test_parse_for_repl() {
+        let parsed = parse_for_repl(scan_tokens(&"var x = 5;").expect("Error scanning"), std::io::stderr())
+            .expect("Error parsing");
+        if let ReplParseOutput::Expr(_) = parsed {
+            assert!(false, "Input was valid statement, but got parsed as expression.")
+        }
+
+        let parsed = parse_for_repl(scan_tokens(&"1").expect("Error scanning"), std::io::stderr())
+            .expect("Error parsing");
+        assert_eq!(parsed, ReplParseOutput::Expr(literal_num(1.0)));
+    }
 }

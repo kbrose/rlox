@@ -6,7 +6,7 @@ use std::{
     io::{self, Write},
 };
 
-use crate::interpreter::Interpreter;
+use crate::interpreter::{Interpreter, LoxValue};
 
 #[macro_use]
 mod define_ast;
@@ -35,7 +35,7 @@ fn run_file(path: &String) -> Result<()> {
 
     let mut interpreter = Interpreter::new(std::io::stdout());
 
-    run(&input, &mut interpreter)?;
+    run(&input, &mut interpreter, false)?;
 
     Ok(())
 }
@@ -53,29 +53,71 @@ fn run_prompt() -> Result<()> {
             println!("");
             break Ok(());
         }
-        let _ = run(&buffer, &mut interpreter); // Errors should have already been printed.
+
+        match run(&buffer, &mut interpreter, true) {
+            Ok(Some(value)) => println!("{value}"), // Show evaluated expressions
+            _ => {}                                 // Errors should have already been printed.
+        }
         buffer.clear(); // clear contents but keep allocated size
     }
 }
 
-fn run<W: Write>(source: &str, interpreter: &mut Interpreter<W>) -> Result<()> {
+fn run<W: Write>(source: &str, interpreter: &mut Interpreter<W>, is_repl: bool) -> Result<Option<LoxValue>> {
     #[cfg(feature = "timings")]
-    let scanning_timer = Instant::now();
+    let timer = Instant::now();
 
     let tokens = scanner::scan_tokens(source)?;
 
     #[cfg(feature = "timings")]
-    let parsing_timer = {
-        println!("Scanning: {:?}", scanning_timer.elapsed());
+    let timer = {
+        println!("Scanning: {:?}", timer.elapsed());
         Instant::now()
     };
 
-    let statements = parser::parse(tokens)?;
+    if is_repl {
+        let parse = parser::parse_for_repl(tokens, std::io::stderr())?;
 
-    #[cfg(feature = "timings")]
-    println!("Parsing : {:?}", parsing_timer.elapsed());
+        #[cfg(feature = "timings")]
+        let timer = {
+            println!("Parsing: {:?}", timer.elapsed());
+            Instant::now()
+        };
 
-    interpreter.interpret(statements)?;
+        match parse {
+            parser::ReplParseOutput::Statements(statements) => {
+                interpreter.interpret(statements)?;
 
-    Ok(())
+                #[cfg(feature = "timings")]
+                println!("Parsing: {:?}", timer.elapsed());
+
+                Ok(None)
+            }
+            parser::ReplParseOutput::Expr(expr) => {
+                let evaluated = interpreter.evaluate(&expr);
+
+                #[cfg(feature = "timings")]
+                println!("Parsing: {:?}", timer.elapsed());
+
+                match evaluated {
+                    Ok(value) => Ok(Some(value)),
+                    Err(_) => Err(anyhow!("Error evaluating expression.")),
+                }
+            }
+        }
+    } else {
+        let statements = parser::parse(tokens, std::io::stderr())?;
+
+        #[cfg(feature = "timings")]
+        let timer = {
+            println!("Parsing: {:?}", timer.elapsed());
+            Instant::now()
+        };
+
+        interpreter.interpret(statements)?;
+
+        #[cfg(feature = "timings")]
+        println!("Parsing: {:?}", timer.elapsed());
+
+        Ok(None)
+    }
 }

@@ -107,7 +107,7 @@ impl<W: Write> Interpreter<W> {
         }
     }
 
-    fn evaluate(&mut self, expr: &Expr) -> Result<LoxValue, RuntimeError> {
+    pub(crate) fn evaluate(&mut self, expr: &Expr) -> Result<LoxValue, RuntimeError> {
         match expr {
             Expr::LiteralExpr(literal) => {
                 let out = match &literal.value {
@@ -262,7 +262,8 @@ mod tests {
         let mut with_semicolon = String::with_capacity(s.len() + 1);
         with_semicolon.push_str(s);
         with_semicolon.push(';');
-        let parsed = parse(scan_tokens(&with_semicolon).expect("scan error")).expect("parse error");
+        let parsed =
+            parse(scan_tokens(&with_semicolon).expect("scan error"), std::io::stderr()).expect("parse error");
         assert!(parsed.len() == 1);
         match parsed.first().unwrap() {
             Stmt::StmtExpression(stmt_expression) => interpreter.evaluate(&stmt_expression.expression),
@@ -277,10 +278,10 @@ mod tests {
         let mut interpreter = Interpreter::new(std::io::stdout());
 
         interpreter
-            .interpret(parse(scan_tokens(stmt).expect("scan error")).expect("parse error"))
+            .interpret(parse(scan_tokens(stmt).expect("scan error"), std::io::stderr()).expect("parse error"))
             .expect("interpreting error");
 
-        let parsed = parse(scan_tokens(expr).expect("scan error")).expect("parse error");
+        let parsed = parse(scan_tokens(expr).expect("scan error"), std::io::stderr()).expect("parse error");
         assert!(parsed.len() == 1);
         match parsed.first().unwrap() {
             Stmt::StmtExpression(stmt_expression) => interpreter.evaluate(&stmt_expression.expression),
@@ -295,7 +296,7 @@ mod tests {
         let mut interpreter = Interpreter::new(buffer);
 
         interpreter
-            .interpret(parse(scan_tokens(stmt).expect("scan error")).expect("parse error"))
+            .interpret(parse(scan_tokens(stmt).expect("scan error"), std::io::stderr()).expect("parse error"))
             .expect("interpreting error");
 
         String::from_utf8(interpreter.writer).expect("Error with UTF8 encoding")
@@ -410,7 +411,7 @@ mod tests {
 
     #[test]
     fn test_scopes() {
-        assert_eq!(String::from("5\n"), execute_stmts("var x = 0; {x = 5;} print x;"));
-        assert_eq!(String::from("0\n"), execute_stmts("var x = 0; {var x = 5;} print x;"));
+        assert_eq!(String::from("5\n5\n"), execute_stmts("var x = 0; {x = 5; print x;} print x;"));
+        assert_eq!(String::from("5\n0\n"), execute_stmts("var x = 0; {var x = 5; print x;} print x;"));
     }
 }
