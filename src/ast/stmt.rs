@@ -7,6 +7,7 @@ define_ast! {
         IfStmt {condition: Expr, then_branch: Stmt, else_branch: Option<Stmt>},
         Print {expression: Expr},
         Var {name: IdentifierToken, initializer: Option<Expr>},
+        While {condition: Expr, body: Stmt},
         Block {statements: Vec<Stmt>},
     }
 }

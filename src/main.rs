@@ -85,7 +85,7 @@ fn run<W: Write>(source: &str, interpreter: &mut Interpreter<W>, is_repl: bool) 
 
         match parse {
             parser::ReplParseOutput::Statements(statements) => {
-                interpreter.interpret(statements)?;
+                interpreter.interpret(&statements)?;
 
                 #[cfg(feature = "timings")]
                 println!("Parsing: {:?}", timer.elapsed());
@@ -113,7 +113,7 @@ fn run<W: Write>(source: &str, interpreter: &mut Interpreter<W>, is_repl: bool) 
             Instant::now()
         };
 
-        interpreter.interpret(statements)?;
+        interpreter.interpret(&statements)?;
 
         #[cfg(feature = "timings")]
         println!("Parsing: {:?}", timer.elapsed());

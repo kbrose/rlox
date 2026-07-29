@@ -3,7 +3,7 @@ use std::io::Write;
 use crate::{
     ast::{
         Assign, Binary, Block, Expr, Grouping, IfStmt, LiteralExpr, Logical, Print, Stmt, StmtExpression,
-        Unary, Var, Variable,
+        Unary, Var, Variable, While,
     },
     parser::parsed_token::{
         BinaryOp, BinaryToken, IdentifierToken, LogicalOp, LogicalToken, ParsedLiteral, UnaryOp, UnaryToken,
@@ -27,11 +27,13 @@ type SResult = Result<Stmt, ParserError>;
 // statement      → exprStmt
 //                | ifStmt
 //                | printStmt
+//                | whileStmt
 //                | block ;
 // exprStmt       → expression ";" ;
 // ifStmt         → "if" "(" expression ")" statement
 //                ( "else" statement )? ;
 // printStmt      → "print" expression ";" ;
+// whileStmt      → "while" "(" expression ")" statement" ;
 // block          → "{" declaration* "}" ;
 //
 //                        Expressions
@@ -288,6 +290,8 @@ impl<'a, W: Write> Parser<'a, W> {
             self.if_statement()
         } else if self.matches_token(&[TokenType::Print]) {
             self.print_statement()
+        } else if self.matches_token(&[TokenType::While]) {
+            self.while_statement()
         } else if self.matches_token(&[TokenType::LeftBrace]) {
             self.block()
         } else {
@@ -298,7 +302,7 @@ impl<'a, W: Write> Parser<'a, W> {
     fn if_statement(&mut self) -> SResult {
         self.consume(TokenType::LeftParen, "Expect '(' before if's condition.")?;
         let condition = self.expression()?;
-        self.consume(TokenType::RightParen, "Expect ')' before if's condition.")?;
+        self.consume(TokenType::RightParen, "Expect ')' after if's condition.")?;
 
         let then_branch = self.statement()?;
 
@@ -315,6 +319,16 @@ impl<'a, W: Write> Parser<'a, W> {
         let expression = self.expression()?;
         self.consume(TokenType::Semicolon, "Expect ';' after value.")?;
         Ok(Print::lift(expression))
+    }
+
+    fn while_statement(&mut self) -> SResult {
+        self.consume(TokenType::LeftParen, "Expect '(' before if's condition.")?;
+        let condition = self.expression()?;
+        self.consume(TokenType::RightParen, "Expect ')' after if's condition.")?;
+
+        let body = self.statement()?;
+
+        Ok(While::lift(condition, body))
     }
 
     fn block(&mut self) -> SResult {

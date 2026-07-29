@@ -212,7 +212,7 @@ impl<W: Write> Interpreter<W> {
         }
     }
 
-    fn execute_stmt(&mut self, stmt: Stmt) -> Result<(), RuntimeError> {
+    fn execute_stmt(&mut self, stmt: &Stmt) -> Result<(), RuntimeError> {
         match stmt {
             Stmt::StmtExpression(stmt_expression) => {
                 self.evaluate(&stmt_expression.expression)?;
@@ -227,7 +227,7 @@ impl<W: Write> Interpreter<W> {
                 })
             }
             Stmt::Var(var) => {
-                let value = if let Some(initializer) = var.initializer {
+                let value = if let Some(initializer) = &var.initializer {
                     self.evaluate(&initializer)
                 } else {
                     Ok(LoxValue::Nil)
@@ -240,7 +240,7 @@ impl<W: Write> Interpreter<W> {
             Stmt::Block(block) => {
                 // item
                 self.environment.enter_scope();
-                for statement in block.statements {
+                for statement in block.statements.iter() {
                     match self.execute_stmt(statement) {
                         Ok(()) => {}
                         Err(runtime_error) => {
@@ -254,9 +254,15 @@ impl<W: Write> Interpreter<W> {
             }
             Stmt::IfStmt(if_stmt) => {
                 if self.evaluate(&if_stmt.condition)?.truthiness() {
-                    self.execute_stmt(if_stmt.then_branch)?
-                } else if let Some(else_stmt) = if_stmt.else_branch {
+                    self.execute_stmt(&if_stmt.then_branch)?
+                } else if let Some(else_stmt) = &if_stmt.else_branch {
                     self.execute_stmt(else_stmt)?
+                }
+                Ok(())
+            }
+            Stmt::While(while_stmt) => {
+                while self.evaluate(&while_stmt.condition)?.truthiness() {
+                    self.execute_stmt(&while_stmt.body)?;
                 }
                 Ok(())
             }
@@ -266,7 +272,7 @@ impl<W: Write> Interpreter<W> {
     // This will have to be converted into an Interpreter struct once we have global vars
     // that should be preserved across runs in the REPL. Or alternatively, some kind of
     // &mut Globals passed in or something like that.
-    pub(crate) fn interpret(&mut self, stmts: Vec<Stmt>) -> AnyhowResult<()> {
+    pub(crate) fn interpret(&mut self, stmts: &[Stmt]) -> AnyhowResult<()> {
         for stmt in stmts {
             self.execute_stmt(stmt).map_err(|e| {
                 eprintln!("{e}");
@@ -304,7 +310,9 @@ mod tests {
         let mut interpreter = Interpreter::new(std::io::stdout());
 
         interpreter
-            .interpret(parse(scan_tokens(stmt).expect("scan error"), std::io::stderr()).expect("parse error"))
+            .interpret(
+                &parse(scan_tokens(stmt).expect("scan error"), std::io::stderr()).expect("parse error"),
+            )
             .expect("interpreting error");
 
         let parsed = parse(scan_tokens(expr).expect("scan error"), std::io::stderr()).expect("parse error");
@@ -322,7 +330,9 @@ mod tests {
         let mut interpreter = Interpreter::new(buffer);
 
         interpreter
-            .interpret(parse(scan_tokens(stmt).expect("scan error"), std::io::stderr()).expect("parse error"))
+            .interpret(
+                &parse(scan_tokens(stmt).expect("scan error"), std::io::stderr()).expect("parse error"),
+            )
             .expect("interpreting error");
 
         String::from_utf8(interpreter.writer).expect("Error with UTF8 encoding")
@@ -470,5 +480,51 @@ mod tests {
     fn test_if_else() {
         assert_eq!(String::from("1\n"), execute_stmts("if (true) print 1; else print 2;"));
         assert_eq!(String::from("2\n"), execute_stmts("if (false) print 1; else print 2;"));
+    }
+
+    #[test]
+    fn test_while() {
+        assert_eq!(
+            String::from("5\n"),
+            execute_stmts(
+                r#"
+                var x = 10;
+                var counter = 0;
+                while (x > 0) {
+                    x = x - 2;
+                    counter = counter + 1;
+                }
+                print counter;
+                "#
+            )
+        );
+
+        assert_eq!(
+            String::from("0\n"),
+            execute_stmts(
+                r#"
+                var x = 10;
+                var counter = 0;
+                while (x > 10) {
+                    x = x - 2;
+                    counter = counter + 1;
+                }
+                print counter;
+                "#
+            )
+        );
+
+        assert_eq!(
+            String::from("8\n6\n4\n2\n0\n"),
+            execute_stmts(
+                r#"
+                var x = 10;
+                while (x > 0) {
+                    x = x - 2;
+                    print x;
+                }
+                "#
+            )
+        );
     }
 }
