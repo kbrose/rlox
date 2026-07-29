@@ -21,13 +21,15 @@ pub(crate) fn pretty_print_expr(expr: &Expr) -> String {
         Expr::Variable(variable) => {
             format!("var {}", variable.name.pretty_print())
         }
+        Expr::Assign(assign) => {
+            format!("{} = {}", assign.name.pretty_print(), pretty_print_expr(&assign.value))
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast_printer::pretty_print_expr;
     use crate::parser::{BinaryOp, BinaryToken, ParsedLiteral, UnaryOp, UnaryToken};
 
     fn unary_token(op: UnaryOp) -> UnaryToken {

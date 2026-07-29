@@ -1,4 +1,5 @@
 // mod ast_printer;
+mod ast_printer;
 mod expr;
 mod stmt;
 

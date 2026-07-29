@@ -134,3 +134,15 @@ pub(crate) enum ParsedLiteral {
     Number(f64),
     String(String),
 }
+
+impl ParsedLiteral {
+    pub(crate) fn pretty_print(&self) -> String {
+        match self {
+            ParsedLiteral::Nil => "nil".to_string(),
+            ParsedLiteral::True => "true".to_string(),
+            ParsedLiteral::False => "false".to_string(),
+            ParsedLiteral::Number(n) => n.to_string(),
+            ParsedLiteral::String(s) => s.clone(),
+        }
+    }
+}
