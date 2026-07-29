@@ -25,11 +25,15 @@ type SResult = Result<Stmt, ParserError>;
 //                | statement ;
 // varDecl        → "var" IDENTIFIER ( "=" expression )? ";" ;
 // statement      → exprStmt
+//                | forStmt
 //                | ifStmt
 //                | printStmt
 //                | whileStmt
 //                | block ;
 // exprStmt       → expression ";" ;
+// forStmt        → "for" "(" (varDecl | exprStmt | ";")
+//                  expression? ";"
+//                  expression? ")" statement ;
 // ifStmt         → "if" "(" expression ")" statement
 //                ( "else" statement )? ;
 // printStmt      → "print" expression ";" ;
@@ -286,7 +290,9 @@ impl<'a, W: Write> Parser<'a, W> {
     }
 
     fn statement(&mut self) -> SResult {
-        if self.matches_token(&[TokenType::If]) {
+        if self.matches_token(&[TokenType::For]) {
+            self.for_statement()
+        } else if self.matches_token(&[TokenType::If]) {
             self.if_statement()
         } else if self.matches_token(&[TokenType::Print]) {
             self.print_statement()
@@ -299,10 +305,53 @@ impl<'a, W: Write> Parser<'a, W> {
         }
     }
 
+    fn for_statement(&mut self) -> SResult {
+        self.consume(TokenType::LeftParen, "Expect '(' after 'for'")?;
+
+        let initializer = if self.matches_token(&[TokenType::Semicolon]) {
+            None
+        } else if self.matches_token(&[TokenType::Var]) {
+            Some(self.var_declaration()?)
+        } else {
+            Some(self.expression_statement()?)
+        };
+
+        let condition = if !self.check(&TokenType::Semicolon) {
+            self.expression()?
+        } else {
+            // If no condition, then it is just `true`
+            LiteralExpr::lift(ParsedLiteral::True)
+        };
+        self.consume(TokenType::Semicolon, "Expect ';' after for loop condition")?;
+
+        let increment = if !self.check(&TokenType::RightParen) {
+            Some(self.expression()?)
+        } else {
+            None
+        };
+        self.consume(TokenType::RightParen, "Expect ')' after for loop clauses")?;
+
+        let body = if let Some(increment_expr) = increment {
+            Block::lift(vec![self.statement()?, StmtExpression::lift(increment_expr)])
+        } else {
+            self.statement()?
+        };
+
+        let body = While::lift(condition, body);
+
+        let body = if let Some(initializer_stmt) = initializer {
+            Block::lift(vec![initializer_stmt, body])
+        } else {
+            body
+        };
+
+        Ok(body)
+    }
+
     fn if_statement(&mut self) -> SResult {
-        self.consume(TokenType::LeftParen, "Expect '(' before if's condition.")?;
+        self.consume(TokenType::LeftParen, "Expect '(' after 'if'")?;
         let condition = self.expression()?;
-        self.consume(TokenType::RightParen, "Expect ')' after if's condition.")?;
+        self.consume(TokenType::RightParen, "Expect ')' 'if' condition")?;
 
         let then_branch = self.statement()?;
 
