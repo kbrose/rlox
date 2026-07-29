@@ -2,9 +2,12 @@ use std::io::Write;
 
 use crate::{
     ast::{
-        Assign, Binary, Block, Expr, Grouping, LiteralExpr, Print, Stmt, StmtExpression, Unary, Var, Variable,
+        Assign, Binary, Block, Expr, Grouping, IfStmt, LiteralExpr, Logical, Print, Stmt, StmtExpression,
+        Unary, Var, Variable,
     },
-    parser::parsed_token::{BinaryOp, BinaryToken, IdentifierToken, ParsedLiteral, UnaryOp, UnaryToken},
+    parser::parsed_token::{
+        BinaryOp, BinaryToken, IdentifierToken, LogicalOp, LogicalToken, ParsedLiteral, UnaryOp, UnaryToken,
+    },
     scanner::{Token, TokenType},
 };
 
@@ -20,11 +23,14 @@ type SResult = Result<Stmt, ParserError>;
 // program        → declaration* EOF ;
 // declaration    → varDecl
 //                | statement ;
+// varDecl        → "var" IDENTIFIER ( "=" expression )? ";" ;
 // statement      → exprStmt
+//                | ifStmt
 //                | printStmt
 //                | block ;
-// varDecl        → "var" IDENTIFIER ( "=" expression )? ";" ;
 // exprStmt       → expression ";" ;
+// ifStmt         → "if" "(" expression ")" statement
+//                ( "else" statement )? ;
 // printStmt      → "print" expression ";" ;
 // block          → "{" declaration* "}" ;
 //
@@ -32,7 +38,9 @@ type SResult = Result<Stmt, ParserError>;
 //
 // expression     → assignment ;
 // assignment     → IDENTIFIER "=" assignment
-//                | comma ;
+//                | logic_or ;
+// logic_or       → logic_and ( "or" logic_and )* ;
+// logic_and      → comma ( "and" comma )* ;
 // comma          → equality ( "," equality )* ;
 // equality       → comparison ( ( "!=" | "==" ) comparison )* ;
 // comparison     → term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
@@ -74,6 +82,8 @@ impl<'a, W: Write> Parser<'a, W> {
             error_writer,
         }
     }
+
+    // Helpers
 
     fn parse(&mut self) -> Result<Vec<Stmt>, ParserError> {
         let mut statements = vec![];
@@ -213,7 +223,7 @@ impl<'a, W: Write> Parser<'a, W> {
         // think it would be impossible to ever observe. Would love to make it unrepresentable,
         // though!
         while self.matches_token(targets) {
-            let operator = self.previous().expect("Empty previous even after advancing?").clone();
+            let operator = self.previous().expect("Empty previous even after advancing?");
             let line = operator.line;
             let op: BinaryOp = match operator.token_type {
                 TokenType::Comma => BinaryOp::Comma,
@@ -239,6 +249,8 @@ impl<'a, W: Write> Parser<'a, W> {
 
         Ok(expr)
     }
+
+    // Statements
 
     fn declaration(&mut self) -> SResult {
         let out = if self.matches_token(&[TokenType::Var]) {
@@ -272,13 +284,31 @@ impl<'a, W: Write> Parser<'a, W> {
     }
 
     fn statement(&mut self) -> SResult {
-        if self.matches_token(&[TokenType::Print]) {
+        if self.matches_token(&[TokenType::If]) {
+            self.if_statement()
+        } else if self.matches_token(&[TokenType::Print]) {
             self.print_statement()
         } else if self.matches_token(&[TokenType::LeftBrace]) {
             self.block()
         } else {
             self.expression_statement()
         }
+    }
+
+    fn if_statement(&mut self) -> SResult {
+        self.consume(TokenType::LeftParen, "Expect '(' before if's condition.")?;
+        let condition = self.expression()?;
+        self.consume(TokenType::RightParen, "Expect ')' before if's condition.")?;
+
+        let then_branch = self.statement()?;
+
+        let else_branch = if self.matches_token(&[TokenType::Else]) {
+            Some(self.statement()?)
+        } else {
+            None
+        };
+
+        Ok(IfStmt::lift(condition, then_branch, else_branch))
     }
 
     fn print_statement(&mut self) -> SResult {
@@ -304,12 +334,14 @@ impl<'a, W: Write> Parser<'a, W> {
         Ok(StmtExpression::lift(expression))
     }
 
+    // Expressions
+
     fn expression(&mut self) -> EResult {
         self.assignment()
     }
 
     fn assignment(&mut self) -> EResult {
-        let expression = self.comma()?;
+        let expression = self.logical_or()?;
 
         if self.matches_token(&[TokenType::Equal]) {
             // This token is ~guaranteed to be an Equal token, but we only need it
@@ -333,6 +365,30 @@ impl<'a, W: Write> Parser<'a, W> {
         }
 
         Ok(expression)
+    }
+
+    fn logical_or(&mut self) -> EResult {
+        let mut expr = self.logical_and()?;
+
+        while self.matches_token(&[TokenType::Or]) {
+            let line = self.previous().expect("Empty previous after advance").line;
+            let right = self.logical_and()?;
+            expr = Logical::lift(expr, LogicalToken::new(LogicalOp::Or, line), right);
+        }
+
+        Ok(expr)
+    }
+
+    fn logical_and(&mut self) -> EResult {
+        let mut expr = self.comma()?;
+
+        while self.matches_token(&[TokenType::And]) {
+            let line = self.previous().expect("Empty previous after advance").line;
+            let right = self.comma()?;
+            expr = Logical::lift(expr, LogicalToken::new(LogicalOp::And, line), right);
+        }
+
+        Ok(expr)
     }
 
     fn comma(&mut self) -> EResult {
@@ -439,6 +495,21 @@ pub(crate) fn parse<W: Write>(tokens: Vec<Token>, mut error_writer: W) -> Result
     parser.parse()
 }
 
+pub(crate) fn parse_expression<W: Write>(
+    tokens: Vec<Token>,
+    mut error_writer: W,
+) -> Result<Expr, ParserError> {
+    let mut parser = Parser::new(&tokens, &mut error_writer);
+    let out = parser.expression();
+    if let Ok(expr) = out
+        && parser.is_at_end()
+    {
+        Ok(expr)
+    } else {
+        Err(ParserError {})
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub(crate) enum ReplParseOutput {
     Statements(Vec<Stmt>),
@@ -453,15 +524,9 @@ pub(crate) fn parse_for_repl<W: Write>(
     // let mut parser = Parser::new(&tokens, &mut statement_parsing_errors);
     match Parser::new(&tokens, &mut statement_parsing_errors).parse() {
         Ok(statements) => Ok(ReplParseOutput::Statements(statements)),
-        Err(statement_error) => {
-            let mut sink = std::io::sink();
-            let mut parser = Parser::new(&tokens, &mut sink);
-            let attempted_expression = parser.expression();
-            if let Ok(expr) = attempted_expression
-                && parser.is_at_end()
-            {
-                Ok(ReplParseOutput::Expr(expr))
-            } else {
+        Err(statement_error) => match parse_expression(tokens, std::io::sink()) {
+            Ok(expr) => Ok(ReplParseOutput::Expr(expr)),
+            Err(_) => {
                 write!(
                     error_writer,
                     "{}",
@@ -471,7 +536,7 @@ pub(crate) fn parse_for_repl<W: Write>(
                 .expect("Error writing error.");
                 Err(statement_error)
             }
-        }
+        },
     }
 }
 

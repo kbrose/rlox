@@ -24,42 +24,33 @@ pub(crate) fn pretty_print_expr(expr: &Expr) -> String {
         Expr::Assign(assign) => {
             format!("{} = {}", assign.name.pretty_print(), pretty_print_expr(&assign.value))
         }
+        Expr::Logical(logical) => {
+            format!(
+                "({} {} {})",
+                pretty_print_expr(&logical.left),
+                logical.operator.pretty_print(),
+                pretty_print_expr(&logical.right)
+            )
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::{BinaryOp, BinaryToken, ParsedLiteral, UnaryOp, UnaryToken};
-
-    fn unary_token(op: UnaryOp) -> UnaryToken {
-        UnaryToken::new(op, 1)
-    }
-
-    fn binary_token(op: BinaryOp) -> BinaryToken {
-        BinaryToken::new(op, 1)
-    }
-
-    fn b<T>(t: T) -> Box<T> {
-        Box::new(t)
-    }
+    use crate::parser::parse_expression;
+    use crate::scanner::scan_tokens;
 
     #[test]
     fn test_pretty_print() {
-        let exp: Expr = Expr::Binary(b(Binary {
-            left: Expr::Unary(b(Unary {
-                operator: unary_token(UnaryOp::Minus),
-                expression: Expr::LiteralExpr(b(LiteralExpr {
-                    value: ParsedLiteral::Number(123.0),
-                })),
-            })),
-            operator: binary_token(BinaryOp::Star),
-            right: Expr::Grouping(b(Grouping {
-                expression: Expr::LiteralExpr(b(LiteralExpr {
-                    value: ParsedLiteral::Number(45.67),
-                })),
-            })),
-        }));
-        assert_eq!(pretty_print_expr(&exp), "((- 123) * (45.67))");
+        let expression =
+            parse_expression(scan_tokens("-123 * (45.67)").expect("Error scanning"), std::io::sink())
+                .expect("Error parsing");
+        assert_eq!(pretty_print_expr(&expression), "((- 123) * (45.67))");
+
+        let expression =
+            parse_expression(scan_tokens("x    =      1").expect("Error scanning"), std::io::sink())
+                .expect("Error parsing");
+        assert_eq!(pretty_print_expr(&expression), "x = 1");
     }
 }

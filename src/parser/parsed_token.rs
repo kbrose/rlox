@@ -127,6 +127,42 @@ impl TokenLike for BinaryToken {
 }
 
 #[derive(Debug, PartialEq, Clone)]
+pub(crate) enum LogicalOp {
+    And,
+    Or,
+}
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct LogicalToken {
+    op: LogicalOp,
+    line: usize,
+}
+impl LogicalToken {
+    pub(crate) fn new(op: LogicalOp, line: usize) -> Self {
+        Self {
+            op,
+            line,
+        }
+    }
+    pub(crate) fn op(&self) -> &LogicalOp {
+        &self.op
+    }
+    pub(crate) fn pretty_print(&self) -> String {
+        match self.op {
+            LogicalOp::And => "and".into(),
+            LogicalOp::Or => "or".into(),
+        }
+    }
+}
+impl TokenLike for LogicalToken {
+    fn line(&self) -> usize {
+        self.line
+    }
+    fn token_display(&self) -> String {
+        self.pretty_print()
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub(crate) enum ParsedLiteral {
     Nil,
     True,

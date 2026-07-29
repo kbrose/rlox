@@ -191,6 +191,24 @@ impl<W: Write> Interpreter<W> {
                     Err(()) => Err(RuntimeError::new(&assign.name, "Undefined variable".to_string())),
                 }
             }
+            Expr::Logical(logical) => {
+                let left = self.evaluate(&logical.left)?;
+
+                match logical.operator.op() {
+                    crate::parser::LogicalOp::And => {
+                        if !left.truthiness() {
+                            return Ok(left);
+                        }
+                    }
+                    crate::parser::LogicalOp::Or => {
+                        if left.truthiness() {
+                            return Ok(left);
+                        }
+                    }
+                }
+
+                self.evaluate(&logical.right)
+            }
         }
     }
 
@@ -232,6 +250,14 @@ impl<W: Write> Interpreter<W> {
                     }
                 }
                 self.environment.exit_scope();
+                Ok(())
+            }
+            Stmt::IfStmt(if_stmt) => {
+                if self.evaluate(&if_stmt.condition)?.truthiness() {
+                    self.execute_stmt(if_stmt.then_branch)?
+                } else if let Some(else_stmt) = if_stmt.else_branch {
+                    self.execute_stmt(else_stmt)?
+                }
                 Ok(())
             }
         }
@@ -360,6 +386,25 @@ mod tests {
         assert_eq!(execute_str(r#""asdf" != "asdf""#).expect(INTER_ERR), boolean(false));
         assert_eq!(execute_str(r#""asdf" == "wxyz""#).expect(INTER_ERR), boolean(false));
         assert_eq!(execute_str(r#""asdf" != "wxyz""#).expect(INTER_ERR), boolean(true));
+
+        assert_eq!(execute_str("0 and 2").expect(INTER_ERR), number(2.0));
+        assert_eq!(execute_str("1 and 2").expect(INTER_ERR), number(2.0));
+        assert_eq!(execute_str("true and 2").expect(INTER_ERR), number(2.0));
+        assert_eq!(execute_str("1 and true").expect(INTER_ERR), boolean(true));
+        assert_eq!(execute_str(r#"1 and "Hi!""#).expect(INTER_ERR), string("Hi!"));
+        assert_eq!(execute_str(r#""Hi!" and 1"#).expect(INTER_ERR), number(1.0));
+        assert_eq!(execute_str(r#"false and 1"#).expect(INTER_ERR), boolean(false));
+        assert_eq!(execute_str(r#"1 and false"#).expect(INTER_ERR), boolean(false));
+        assert_eq!(execute_str(r#"1 and nil"#).expect(INTER_ERR), LoxValue::Nil);
+        assert_eq!(execute_str(r#"nil and 1"#).expect(INTER_ERR), LoxValue::Nil);
+
+        assert_eq!(execute_str("1 or 2").expect(INTER_ERR), number(1.0));
+        assert_eq!(execute_str(r#""Hi!" or 1"#).expect(INTER_ERR), string("Hi!"));
+        assert_eq!(execute_str(r#"false or 1"#).expect(INTER_ERR), number(1.0));
+        assert_eq!(execute_str(r#"false or true"#).expect(INTER_ERR), boolean(true));
+        assert_eq!(execute_str(r#"false or false"#).expect(INTER_ERR), boolean(false));
+        assert_eq!(execute_str(r#"nil or false"#).expect(INTER_ERR), boolean(false));
+        assert_eq!(execute_str(r#"false or nil"#).expect(INTER_ERR), LoxValue::Nil);
     }
 
     #[test]
@@ -413,5 +458,17 @@ mod tests {
     fn test_scopes() {
         assert_eq!(String::from("5\n5\n"), execute_stmts("var x = 0; {x = 5; print x;} print x;"));
         assert_eq!(String::from("5\n0\n"), execute_stmts("var x = 0; {var x = 5; print x;} print x;"));
+    }
+
+    #[test]
+    fn test_if() {
+        assert_eq!(String::from("1\n"), execute_stmts("if (true) print 1;"));
+        assert_eq!(String::from(""), execute_stmts("if (false) print 1;"));
+    }
+
+    #[test]
+    fn test_if_else() {
+        assert_eq!(String::from("1\n"), execute_stmts("if (true) print 1; else print 2;"));
+        assert_eq!(String::from("2\n"), execute_stmts("if (false) print 1; else print 2;"));
     }
 }
