@@ -2,7 +2,7 @@ use std::io::Write;
 
 use crate::{
     ast::{
-        Assign, Binary, Block, Expr, Grouping, IfStmt, LiteralExpr, Logical, Print, Stmt, StmtExpression,
+        Assign, Binary, Block, Break, Expr, Grouping, If, LiteralExpr, Logical, Print, Stmt, StmtExpression,
         Unary, Var, Variable, While,
     },
     parser::parsed_token::{
@@ -29,6 +29,7 @@ type SResult = Result<Stmt, ParserError>;
 //                | ifStmt
 //                | printStmt
 //                | whileStmt
+//                | breakStmt
 //                | block ;
 // exprStmt       → expression ";" ;
 // forStmt        → "for" "(" (varDecl | exprStmt | ";")
@@ -38,6 +39,7 @@ type SResult = Result<Stmt, ParserError>;
 //                ( "else" statement )? ;
 // printStmt      → "print" expression ";" ;
 // whileStmt      → "while" "(" expression ")" statement" ;
+// breakStmt      → "break" ";" ;
 // block          → "{" declaration* "}" ;
 //
 //                        Expressions
@@ -62,6 +64,7 @@ struct Parser<'a, W: Write> {
     current: usize,
     parse_error: bool,
     error_writer: &'a mut W,
+    loop_level: u8,
 }
 
 #[derive(Debug)]
@@ -86,6 +89,7 @@ impl<'a, W: Write> Parser<'a, W> {
             current: 0,
             parse_error: false,
             error_writer,
+            loop_level: 0,
         }
     }
 
@@ -291,17 +295,58 @@ impl<'a, W: Write> Parser<'a, W> {
 
     fn statement(&mut self) -> SResult {
         if self.matches_token(&[TokenType::For]) {
-            self.for_statement()
+            self.looping_statement(Self::for_statement)
         } else if self.matches_token(&[TokenType::If]) {
             self.if_statement()
         } else if self.matches_token(&[TokenType::Print]) {
             self.print_statement()
         } else if self.matches_token(&[TokenType::While]) {
-            self.while_statement()
+            self.looping_statement(Self::while_statement)
+        } else if self.matches_token(&[TokenType::Break]) {
+            self.break_statement()
         } else if self.matches_token(&[TokenType::LeftBrace]) {
             self.block()
         } else {
             self.expression_statement()
+        }
+    }
+
+    fn looping_statement<F>(&mut self, mut f: F) -> SResult
+    where
+        F: FnMut(&mut Self) -> SResult,
+    {
+        self.increment_loop_level()?;
+        let out = f(self);
+        self.decrement_loop_level();
+        out
+    }
+
+    fn increment_loop_level(&mut self) -> Result<(), ParserError> {
+        match self.loop_level.checked_add(1) {
+            Some(i) => {
+                self.loop_level = i;
+                Ok(())
+            }
+            None => {
+                let token = &self.tokens[self.current.checked_sub(1).unwrap_or(0)];
+                self.error(
+                    token.line,
+                    token.token_type.pretty_print(),
+                    "Only 256 levels of loop nesting are supported.",
+                );
+                Err(ParserError {})
+            }
+        }
+    }
+
+    fn decrement_loop_level(&mut self) {
+        match self.loop_level.checked_sub(1) {
+            Some(i) => {
+                self.loop_level = i;
+            }
+            None => {
+                panic!("Loop level falling below zero, this should be impossible.");
+            }
         }
     }
 
@@ -361,7 +406,7 @@ impl<'a, W: Write> Parser<'a, W> {
             None
         };
 
-        Ok(IfStmt::lift(condition, then_branch, else_branch))
+        Ok(If::lift(condition, then_branch, else_branch))
     }
 
     fn print_statement(&mut self) -> SResult {
@@ -378,6 +423,17 @@ impl<'a, W: Write> Parser<'a, W> {
         let body = self.statement()?;
 
         Ok(While::lift(condition, body))
+    }
+
+    fn break_statement(&mut self) -> SResult {
+        if self.loop_level > 0 {
+            self.consume(TokenType::Semicolon, "Expect ';' after break")?;
+            Ok(Break::lift())
+        } else {
+            let token = &self.tokens[self.current.checked_sub(1).unwrap_or(0)];
+            self.error(token.line, token.token_type.pretty_print(), "Expect 'break' inside loop.");
+            Err(ParserError {})
+        }
     }
 
     fn block(&mut self) -> SResult {
@@ -700,6 +756,7 @@ mod tests {
     fn test_parse_errors() {
         assert!(parse(scan_tokens(&"+123;").expect("Error scanning"), std::io::stderr()).is_err());
         assert!(parse(scan_tokens(&"class;").expect("Error scanning"), std::io::stderr()).is_err());
+        assert!(parse(scan_tokens(&"break;").expect("Error scanning"), std::io::stderr()).is_err());
     }
 
     #[test]
@@ -733,6 +790,86 @@ mod tests {
             ],
             parsed
         );
+    }
+
+    #[test]
+    fn test_while_loop_parses_to_while_loop() {
+        let parsed = parse(
+            scan_tokens(&"var x = 0; while (x < 5) {print x; x = x + 1;}").expect("Error scanning"),
+            std::io::stderr(),
+        )
+        .expect("Error parsing");
+        assert_eq!(
+            vec![
+                Var::lift(
+                    IdentifierToken::new("x".into(), 1),
+                    Some(LiteralExpr::lift(ParsedLiteral::Number(0.0)))
+                ),
+                While::lift(
+                    Binary::lift(
+                        Variable::lift(IdentifierToken::new("x".into(), 1)),
+                        BinaryToken::new(BinaryOp::Less, 1),
+                        LiteralExpr::lift(ParsedLiteral::Number(5.0))
+                    ),
+                    Block::lift(vec![
+                        Print::lift(Variable::lift(IdentifierToken::new("x".into(), 1))),
+                        StmtExpression::lift(Assign::lift(
+                            IdentifierToken::new("x".into(), 1),
+                            Binary::lift(
+                                Variable::lift(IdentifierToken::new("x".into(), 1)),
+                                BinaryToken::new(BinaryOp::Plus, 1),
+                                LiteralExpr::lift(ParsedLiteral::Number(1.0)),
+                            ),
+                        )),
+                    ]),
+                )
+            ],
+            parsed
+        );
+    }
+
+    #[test]
+    fn test_for_loop_parses_to_while_loop() {
+        let parsed = parse(
+            scan_tokens(&"for (var x = 0; x < 5; x = x + 1) {print x;}").expect("Error scanning"),
+            std::io::stderr(),
+        )
+        .expect("Error parsing");
+        assert_eq!(
+            vec![Block::lift(vec![
+                Var::lift(
+                    IdentifierToken::new("x".into(), 1),
+                    Some(LiteralExpr::lift(ParsedLiteral::Number(0.0)))
+                ),
+                While::lift(
+                    Binary::lift(
+                        Variable::lift(IdentifierToken::new("x".into(), 1)),
+                        BinaryToken::new(BinaryOp::Less, 1),
+                        LiteralExpr::lift(ParsedLiteral::Number(5.0))
+                    ),
+                    Block::lift(vec![
+                        Block::lift(vec![Print::lift(Variable::lift(IdentifierToken::new("x".into(), 1)))]),
+                        StmtExpression::lift(Assign::lift(
+                            IdentifierToken::new("x".into(), 1),
+                            Binary::lift(
+                                Variable::lift(IdentifierToken::new("x".into(), 1)),
+                                BinaryToken::new(BinaryOp::Plus, 1),
+                                LiteralExpr::lift(ParsedLiteral::Number(1.0)),
+                            ),
+                        )),
+                    ]),
+                )
+            ])],
+            parsed
+        );
+    }
+
+    #[test]
+    fn test_break() {
+        let parsed = parse(scan_tokens(&"while (true) break;").expect("Error scanning"), std::io::stderr())
+            .expect("Error parsing");
+
+        assert_eq!(vec![While::lift(LiteralExpr::lift(ParsedLiteral::True), Break::lift())], parsed)
     }
 
     #[test]

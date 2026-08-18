@@ -45,6 +45,7 @@ pub(crate) enum TokenType {
     True,
     Var,
     While,
+    Break,
 
     // End of file
     Eof,
@@ -91,6 +92,7 @@ impl TokenType {
             TokenType::True => "true".to_string(),
             TokenType::Var => "var".to_string(),
             TokenType::While => "while".to_string(),
+            TokenType::Break => "break".to_string(),
             TokenType::Eof => "<EOF>".to_string(),
         }
     }

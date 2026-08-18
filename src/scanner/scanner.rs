@@ -34,6 +34,7 @@ static KEYWORD_MAP: LazyLock<HashMap<&'static str, TokenType>> = LazyLock::new(|
         ("true", TokenType::True),
         ("var", TokenType::Var),
         ("while", TokenType::While),
+        ("break", TokenType::Break),
     ])
 });
 

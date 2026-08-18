@@ -8,6 +8,11 @@ use crate::{
 use anyhow::{Result as AnyhowResult, anyhow};
 use std::io::Write;
 
+enum LoopControlFlow {
+    Normal,
+    Break,
+}
+
 #[derive(Debug)]
 pub(crate) struct RuntimeError {
     line: usize,
@@ -212,19 +217,21 @@ impl<W: Write> Interpreter<W> {
         }
     }
 
-    fn execute_stmt(&mut self, stmt: &Stmt) -> Result<(), RuntimeError> {
+    fn execute_stmt(&mut self, stmt: &Stmt) -> Result<LoopControlFlow, RuntimeError> {
         match stmt {
             Stmt::StmtExpression(stmt_expression) => {
                 self.evaluate(&stmt_expression.expression)?;
-                Ok(())
+                Ok(LoopControlFlow::Normal)
             }
             Stmt::Print(print) => {
                 let value = self.evaluate(&print.expression)?;
-                writeln!(self.writer, "{}", value).map_err(|e| RuntimeError {
-                    line: 0,
-                    token_display: "".to_string(),
-                    message: format!("Error writing to output stream: {e}"),
-                })
+                writeln!(self.writer, "{}", value)
+                    .map_err(|e| RuntimeError {
+                        line: 0,
+                        token_display: "".to_string(),
+                        message: format!("Error writing to output stream: {e}"),
+                    })
+                    .map(|_| LoopControlFlow::Normal)
             }
             Stmt::Var(var) => {
                 let value = if let Some(initializer) = &var.initializer {
@@ -235,37 +242,52 @@ impl<W: Write> Interpreter<W> {
 
                 self.environment.define(&var.name, value);
 
-                Ok(())
+                Ok(LoopControlFlow::Normal)
             }
             Stmt::Block(block) => {
-                // item
                 self.environment.enter_scope();
+                let mut out = Ok(LoopControlFlow::Normal);
                 for statement in block.statements.iter() {
                     match self.execute_stmt(statement) {
-                        Ok(()) => {}
+                        Ok(control_flow) => {
+                            match control_flow {
+                                LoopControlFlow::Normal => {}
+                                LoopControlFlow::Break => {
+                                    out = Ok(control_flow);
+                                    break;
+                                }
+                            };
+                        }
                         Err(runtime_error) => {
-                            self.environment.exit_scope();
-                            return Err(runtime_error);
+                            out = Err(runtime_error);
+                            break;
                         }
                     }
                 }
                 self.environment.exit_scope();
-                Ok(())
+                out
             }
-            Stmt::IfStmt(if_stmt) => {
+            Stmt::If(if_stmt) => {
                 if self.evaluate(&if_stmt.condition)?.truthiness() {
-                    self.execute_stmt(&if_stmt.then_branch)?
+                    self.execute_stmt(&if_stmt.then_branch)
                 } else if let Some(else_stmt) = &if_stmt.else_branch {
-                    self.execute_stmt(else_stmt)?
+                    self.execute_stmt(else_stmt)
+                } else {
+                    Ok(LoopControlFlow::Normal)
                 }
-                Ok(())
             }
             Stmt::While(while_stmt) => {
                 while self.evaluate(&while_stmt.condition)?.truthiness() {
-                    self.execute_stmt(&while_stmt.body)?;
+                    match self.execute_stmt(&while_stmt.body)? {
+                        LoopControlFlow::Normal => {}
+                        LoopControlFlow::Break => {
+                            break;
+                        }
+                    }
                 }
-                Ok(())
+                Ok(LoopControlFlow::Normal)
             }
+            Stmt::Break(_) => Ok(LoopControlFlow::Break),
         }
     }
 
@@ -540,9 +562,29 @@ mod tests {
                 var temp;
 
                 for (var b = 1; a < 10000; b = temp + b) {
-                  print a;
-                  temp = a;
-                  a = b;
+                    print a;
+                    temp = a;
+                    a = b;
+                }
+                "#
+            )
+        );
+    }
+
+    #[test]
+    fn test_break() {
+        assert_eq!(
+            String::from("0\n1\n1\n2\n3\n5\n8\n13\n21\n34\n55\n89\n"),
+            execute_stmts(
+                r#"
+                var a = 0;
+                var temp;
+
+                for (var b = 1; a < 10000; b = temp + b) {
+                    if (a > 100) break;
+                    print a;
+                    temp = a;
+                    a = b;
                 }
                 "#
             )

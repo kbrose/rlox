@@ -3,7 +3,7 @@ macro_rules! define_ast {
         $enum_name:ident {
             $(
                 $struct_name:ident {
-                    $( $field_name:ident : $field_type:ty ),+ $(,)?
+                    $( $field_name:ident : $field_type:ty ),* $(,)?
                 }
             ),* $(,)?
         }
@@ -12,12 +12,12 @@ macro_rules! define_ast {
         $(
             #[derive(Clone, Debug, PartialEq)]
             pub(crate) struct $struct_name {
-                $( pub(crate) $field_name: $field_type, )+
+                $( pub(crate) $field_name: $field_type, )*
             }
 
             impl $struct_name {
-                pub(crate) fn lift( $($field_name: $field_type, )+ ) -> $enum_name {
-                    $enum_name::$struct_name(Box::new($struct_name{ $($field_name, )+ }))
+                pub(crate) fn lift( $($field_name: $field_type, )* ) -> $enum_name {
+                    $enum_name::$struct_name(Box::new($struct_name{ $($field_name, )* }))
                 }
             }
         )*
