@@ -4,7 +4,7 @@
 // more type-safe if those expressions/statements can only hold tokens
 // of the correct type.
 
-use crate::scanner::TokenLike;
+use crate::scanner::{Token, TokenLike, TokenType};
 
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct IdentifierToken {
@@ -16,6 +16,12 @@ impl IdentifierToken {
         Self {
             identifier,
             line,
+        }
+    }
+    pub(crate) fn new_from_token(token: &Token) -> Self {
+        match &token.token_type {
+            TokenType::Identifier(identifier) => Self::new(identifier.clone(), token.line),
+            _ => todo!(),
         }
     }
     pub(crate) fn pretty_print(&self) -> String {
@@ -184,33 +190,22 @@ impl ParsedLiteral {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub(crate) enum CallerMarker {
-    Open,
-    Close,
-}
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) struct CallerToken {
-    marker: CallerMarker,
+pub(crate) struct ErrorTrackingToken {
+    display: String,
     line: usize,
 }
-impl CallerToken {
-    pub(crate) fn new(marker: CallerMarker, line: usize) -> Self {
+impl ErrorTrackingToken {
+    pub(crate) fn new(display: String, line: usize) -> Self {
         Self {
-            marker,
+            display,
             line,
         }
     }
-    pub(crate) fn marker(&self) -> &CallerMarker {
-        &self.marker
-    }
     pub(crate) fn pretty_print(&self) -> String {
-        match self.marker {
-            CallerMarker::Open => "(".to_string(),
-            CallerMarker::Close => ")".to_string(),
-        }
+        self.display.clone()
     }
 }
-impl TokenLike for CallerToken {
+impl TokenLike for ErrorTrackingToken {
     fn line(&self) -> usize {
         self.line
     }

@@ -1,6 +1,6 @@
-use std::fmt;
-
+use crate::ast::Function;
 use crate::interpreter::callables::LoxCallable;
+use crate::interpreter::environment::Environment;
 use std::io::Write;
 use std::time::SystemTime;
 
@@ -11,27 +11,13 @@ pub(crate) enum LoxObject {
     Number(f64),
     String(String),
     NativeFunction(NativeFunction),
+    LoxFunction(LoxFunction),
 }
 
-impl fmt::Display for LoxObject {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Nil => write!(f, "nil"),
-            Self::Boolean(b) => write!(f, "{b}"),
-            Self::Number(x) => {
-                let s: String = x.to_string();
-                if s.ends_with(".0") {
-                    write!(f, "{}", s.split('.').next().unwrap())
-                } else {
-                    write!(f, "{}", s)
-                }
-            }
-            Self::String(s) => write!(f, "{}", s),
-            // TODO: Any other kind of representation here?
-            Self::NativeFunction(_) => write!(f, "<native fn>"),
-        }
-    }
-}
+// impl fmt::Display for LoxObject {
+//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+//     }
+// }
 
 impl LoxObject {
     pub(crate) fn truthiness(&self) -> bool {
@@ -50,6 +36,7 @@ impl LoxObject {
             LoxObject::Boolean(_) => Err(String::from("Type error: expected Number, found Boolean")),
             LoxObject::String(_) => Err(String::from("Type error: expected Number, found String")),
             LoxObject::NativeFunction(_) => Err(String::from("Type error: expected Number, found Function")),
+            LoxObject::LoxFunction(_) => Err(String::from("Type error: expected Number, found Function")),
         }
     }
 
@@ -60,6 +47,7 @@ impl LoxObject {
             LoxObject::Nil => Err(String::from("Type error: expected String, found Nil")),
             LoxObject::Boolean(_) => Err(String::from("Type error: expected String, found Boolean")),
             LoxObject::NativeFunction(_) => Err(String::from("Type error: expected String, found Function")),
+            LoxObject::LoxFunction(_) => Err(String::from("Type error: expected String, found Function")),
         }
     }
 
@@ -71,6 +59,7 @@ impl LoxObject {
             Self::String(_) => Err(String::from("Type error: expected Callable, found String")),
             // TODO: Avoid clone
             Self::NativeFunction(native_function) => Ok(Box::new(native_function.clone())),
+            Self::LoxFunction(lox_function) => Ok(Box::new(lox_function.clone())),
         }
     }
 
@@ -79,6 +68,24 @@ impl LoxObject {
             (a.is_nan() && b.is_nan()) || (a == b)
         } else {
             self == other
+        }
+    }
+
+    pub(crate) fn to_string<W: Write>(&self) -> String {
+        match self {
+            Self::Nil => "nil".to_string(),
+            Self::Boolean(b) => b.to_string(),
+            Self::Number(x) => {
+                let s: String = x.to_string();
+                if s.ends_with(".0") {
+                    s.split('.').next().unwrap().to_string()
+                } else {
+                    s
+                }
+            }
+            Self::String(s) => s.clone(),
+            Self::NativeFunction(fun) => <NativeFunction as LoxCallable<W>>::to_string(fun),
+            Self::LoxFunction(fun) => <LoxFunction as LoxCallable<W>>::to_string(fun),
         }
     }
 }
@@ -92,8 +99,8 @@ impl<W: Write> LoxCallable<W> for NativeFunction {
     fn call(
         self: &Self,
         _interpreter: &mut crate::interpreter::Interpreter<W>,
-        _args: &[LoxObject],
-    ) -> Result<LoxObject, crate::interpreter::interpreter::RuntimeError> {
+        _args: Vec<LoxObject>,
+    ) -> Result<LoxObject, crate::interpreter::interpreter::EvaluationException> {
         match self {
             Self::Clock => {
                 let now = SystemTime::now();
@@ -115,5 +122,48 @@ impl<W: Write> LoxCallable<W> for NativeFunction {
 
     fn to_string(self: &Self) -> String {
         "<native fn>".to_string()
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct LoxFunction {
+    declaration: Function,
+}
+
+impl LoxFunction {
+    pub(crate) fn new(declaration: Function) -> Self {
+        Self {
+            declaration,
+        }
+    }
+}
+
+impl<W: Write> LoxCallable<W> for LoxFunction {
+    fn call(
+        self: &Self,
+        interpreter: &mut crate::interpreter::Interpreter<W>,
+        args: Vec<LoxObject>,
+    ) -> Result<LoxObject, crate::interpreter::interpreter::EvaluationException> {
+        let mut env = Environment::new_with_global(interpreter.global_env());
+
+        for (param_identifier, param_value) in self.declaration.params.iter().zip(args.into_iter()) {
+            env.define(param_identifier, param_value);
+        }
+
+        let old_env = interpreter.environment.clone();
+        interpreter.environment = env;
+        let out = interpreter.execute_stmt(&self.declaration.body);
+        interpreter.environment = old_env;
+        out?;
+
+        Ok(LoxObject::Nil)
+    }
+
+    fn arity(self: &Self) -> usize {
+        self.declaration.params.len()
+    }
+
+    fn to_string(self: &Self) -> String {
+        format!("<fn {}>", self.declaration.name.identifier())
     }
 }

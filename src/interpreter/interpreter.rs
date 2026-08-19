@@ -1,11 +1,11 @@
-use std::fmt;
+use std::{collections::HashMap, fmt};
 
 use crate::{
     ast::{Expr, Stmt},
     interpreter::{
         callables::LoxCallable,
         environment::Environment,
-        lox_object::{LoxObject, NativeFunction},
+        lox_object::{LoxFunction, LoxObject, NativeFunction},
     },
     parser::IdentifierToken,
     scanner::TokenLike,
@@ -13,9 +13,21 @@ use crate::{
 use anyhow::{Result as AnyhowResult, anyhow};
 use std::io::Write;
 
-enum LoopControlFlow {
+pub(super) enum LoopControlFlow {
     Normal,
     Break,
+}
+
+#[derive(Debug)]
+pub(crate) enum EvaluationException {
+    Return(LoxObject),
+    RuntimeError(RuntimeError),
+}
+
+impl From<RuntimeError> for EvaluationException {
+    fn from(error: RuntimeError) -> Self {
+        EvaluationException::RuntimeError(error)
+    }
 }
 
 #[derive(Debug)]
@@ -42,7 +54,7 @@ impl fmt::Display for RuntimeError {
 }
 
 pub(crate) struct Interpreter<W: Write> {
-    environment: Environment,
+    pub(super) environment: Environment,
     writer: W,
 }
 
@@ -59,7 +71,11 @@ impl<W: Write> Interpreter<W> {
         }
     }
 
-    pub(crate) fn evaluate(&mut self, expr: &Expr) -> Result<LoxObject, RuntimeError> {
+    pub(super) fn global_env(&self) -> HashMap<String, LoxObject> {
+        self.environment.global()
+    }
+
+    pub(crate) fn evaluate(&mut self, expr: &Expr) -> Result<LoxObject, EvaluationException> {
         match expr {
             Expr::LiteralExpr(literal) => {
                 let out = match &literal.value {
@@ -88,7 +104,9 @@ impl<W: Write> Interpreter<W> {
                 let left = self.evaluate(&binary.left)?;
                 let right = self.evaluate(&binary.right)?;
 
-                let err = |message: String| RuntimeError::new(&binary.operator, message);
+                let err = |message: String| {
+                    EvaluationException::RuntimeError(RuntimeError::new(&binary.operator, message))
+                };
 
                 match binary.operator.op() {
                     crate::parser::BinaryOp::Minus => Ok(LoxObject::Number(
@@ -134,13 +152,13 @@ impl<W: Write> Interpreter<W> {
                     _ => panic!("Unexpected token type for binary!"), // TODO: Don't panic, make unrepresentable
                 }
             }
-            Expr::Variable(variable) => self.environment.get(&variable.name),
+            Expr::Variable(variable) => self.environment.get(&variable.name).map_err(|e| e.into()),
             Expr::Assign(assign) => {
                 let value = self.evaluate(&assign.value)?;
                 // TODO: Any way to avoid the clone here?
                 match self.environment.assign(&assign.name, value.clone()) {
                     Ok(()) => Ok(value),
-                    Err(()) => Err(RuntimeError::new(&assign.name, "Undefined variable".to_string())),
+                    Err(()) => Err(RuntimeError::new(&assign.name, "Undefined variable".to_string()).into()),
                 }
             }
             Expr::Logical(logical) => {
@@ -174,7 +192,8 @@ impl<W: Write> Interpreter<W> {
                     return Err(RuntimeError::new(
                         &call.open_paren,
                         format!("Expected {arity} arguments, got {num_args}."),
-                    ));
+                    )
+                    .into());
                 }
 
                 let mut arguments: Vec<LoxObject> = Vec::with_capacity(num_args);
@@ -182,12 +201,16 @@ impl<W: Write> Interpreter<W> {
                     arguments.push(self.evaluate(argument)?)
                 }
 
-                callee.call(self, &arguments)
+                match callee.call(self, arguments) {
+                    // Reinterpret Return exceptions as Ok values.
+                    Err(EvaluationException::Return(return_value)) => Ok(return_value),
+                    catchall => catchall, // Other Ok(x) and RuntimeErrors get passed on
+                }
             }
         }
     }
 
-    fn execute_stmt(&mut self, stmt: &Stmt) -> Result<LoopControlFlow, RuntimeError> {
+    pub(super) fn execute_stmt(&mut self, stmt: &Stmt) -> Result<LoopControlFlow, EvaluationException> {
         match stmt {
             Stmt::StmtExpression(stmt_expression) => {
                 self.evaluate(&stmt_expression.expression)?;
@@ -195,13 +218,16 @@ impl<W: Write> Interpreter<W> {
             }
             Stmt::Print(print) => {
                 let value = self.evaluate(&print.expression)?;
-                writeln!(self.writer, "{}", value)
-                    .map_err(|e| RuntimeError {
-                        line: 0,
-                        token_display: "".to_string(),
-                        message: format!("Error writing to output stream: {e}"),
-                    })
-                    .map(|_| LoopControlFlow::Normal)
+                writeln!(self.writer, "{}", value.to_string::<W>()).map(|_| LoopControlFlow::Normal).map_err(
+                    |e| {
+                        RuntimeError {
+                            line: 0,
+                            token_display: "".to_string(),
+                            message: format!("Error writing to output stream: {e}"),
+                        }
+                        .into()
+                    },
+                )
             }
             Stmt::Var(var) => {
                 let value = if let Some(initializer) = &var.initializer {
@@ -258,6 +284,18 @@ impl<W: Write> Interpreter<W> {
                 Ok(LoopControlFlow::Normal)
             }
             Stmt::Break(_) => Ok(LoopControlFlow::Break),
+            Stmt::Function(function) => {
+                self.environment
+                    .define(&function.name, LoxObject::LoxFunction(LoxFunction::new((**function).clone())));
+                Ok(LoopControlFlow::Normal)
+            }
+            Stmt::Return(return_stmt) => {
+                let out = match &return_stmt.value {
+                    Some(expr) => self.evaluate(&expr)?,
+                    None => LoxObject::Nil,
+                };
+                Err(EvaluationException::Return(out))
+            }
         }
     }
 
@@ -267,7 +305,14 @@ impl<W: Write> Interpreter<W> {
     pub(crate) fn interpret(&mut self, stmts: &[Stmt]) -> AnyhowResult<()> {
         for stmt in stmts {
             self.execute_stmt(stmt).map_err(|e| {
-                eprintln!("{e}");
+                match e {
+                    EvaluationException::Return(_) => {
+                        eprintln!("Encountered return outside of function");
+                    }
+                    EvaluationException::RuntimeError(runtime_error) => {
+                        eprintln!("{runtime_error}");
+                    }
+                }
                 anyhow!("")
             })?;
         }
@@ -281,7 +326,7 @@ mod tests {
 
     use super::*;
 
-    fn execute_str(s: &str) -> Result<LoxObject, RuntimeError> {
+    fn execute_str(s: &str) -> Result<LoxObject, EvaluationException> {
         let mut interpreter = Interpreter::new(std::io::stdout());
         let mut with_semicolon = String::with_capacity(s.len() + 1);
         with_semicolon.push_str(s);
@@ -298,7 +343,7 @@ mod tests {
         // interpret_expr(&)
     }
 
-    fn execute_stmt_and_expr(stmt: &str, expr: &str) -> Result<LoxObject, RuntimeError> {
+    fn execute_stmt_and_expr(stmt: &str, expr: &str) -> Result<LoxObject, EvaluationException> {
         let mut interpreter = Interpreter::new(std::io::stdout());
 
         interpreter
@@ -559,5 +604,49 @@ mod tests {
                 "#
             )
         );
+    }
+
+    #[test]
+    fn test_clock() {
+        assert_eq!(
+            String::from("true\n"),
+            execute_stmts(
+                r#"
+                var x = clock();
+
+                print x >= 0.0;
+                "#
+            )
+        );
+    }
+
+    #[test]
+    fn test_user_defined_function() {
+        assert_eq!(
+            String::from("Hi, Dear Reader!\n"),
+            execute_stmts(
+                r#"
+                fun sayHi(first, last) {
+                    print "Hi, " + first + " " + last + "!";
+                }
+
+                sayHi("Dear", "Reader");
+                "#
+            )
+        );
+
+        assert_eq!(
+            String::from("55\n"),
+            execute_stmts(
+                r#"
+                fun fib(n) {
+                  if (n <= 1) return n;
+                  return fib(n - 2) + fib(n - 1);
+                }
+
+                print fib(10);
+                "#
+            )
+        )
     }
 }

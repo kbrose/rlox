@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::interpreter::RuntimeError;
 use crate::{interpreter::lox_object::LoxObject, parser::IdentifierToken};
 
+#[derive(Clone)]
 pub(crate) struct Environment {
     global: HashMap<String, LoxObject>,
     scopes: Vec<HashMap<String, LoxObject>>,
@@ -14,6 +15,17 @@ impl Environment {
             global: HashMap::new(),
             scopes: vec![],
         }
+    }
+
+    pub(crate) fn new_with_global(global: HashMap<String, LoxObject>) -> Self {
+        Environment {
+            global,
+            scopes: vec![],
+        }
+    }
+
+    pub(super) fn global(&self) -> HashMap<String, LoxObject> {
+        self.global.clone()
     }
 
     fn innermost(&mut self) -> &mut HashMap<String, LoxObject> {

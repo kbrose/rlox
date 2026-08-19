@@ -2,17 +2,17 @@ use std::io::Write;
 
 use crate::{
     ast::{
-        Assign, Binary, Block, Break, Call, Expr, Grouping, If, LiteralExpr, Logical, Print, Stmt,
-        StmtExpression, Unary, Var, Variable, While,
+        Assign, Binary, Block, Break, Call, Expr, Function, Grouping, If, LiteralExpr, Logical, Print,
+        Return, Stmt, StmtExpression, Unary, Var, Variable, While,
     },
     parser::{
-        CallerMarker, CallerToken,
+        ErrorTrackingToken,
         parsed_token::{
             BinaryOp, BinaryToken, IdentifierToken, LogicalOp, LogicalToken, ParsedLiteral, UnaryOp,
             UnaryToken,
         },
     },
-    scanner::{Token, TokenType},
+    scanner::{Token, TokenLike, TokenType},
 };
 
 // TODO: Better names for these
@@ -25,13 +25,18 @@ type SResult = Result<Stmt, ParserError>;
 //                        Statements
 //
 // program        → declaration* EOF ;
-// declaration    → varDecl
+// declaration    → funDecl
+//                | varDecl
 //                | statement ;
+// funDecl        → "fun" function ;
+// function       → IDENTIFIER "(" parameters? ")" block ;
+// parameters     → IDENTIFIER ( "," IDENTIFIER )* ;
 // varDecl        → "var" IDENTIFIER ( "=" expression )? ";" ;
 // statement      → exprStmt
 //                | forStmt
 //                | ifStmt
 //                | printStmt
+//                | returnStmt
 //                | whileStmt
 //                | breakStmt
 //                | block ;
@@ -42,6 +47,7 @@ type SResult = Result<Stmt, ParserError>;
 // ifStmt         → "if" "(" expression ")" statement
 //                ( "else" statement )? ;
 // printStmt      → "print" expression ";" ;
+// returnStmt     → "return" expression? ";" ;
 // whileStmt      → "while" "(" expression ")" statement" ;
 // breakStmt      → "break" ";" ;
 // block          → "{" declaration* "}" ;
@@ -272,7 +278,9 @@ impl<'a, W: Write> Parser<'a, W> {
     // Statements
 
     fn declaration(&mut self) -> SResult {
-        let out = if self.matches_token(&[TokenType::Var]) {
+        let out = if self.matches_token(&[TokenType::Fun]) {
+            self.function("function")
+        } else if self.matches_token(&[TokenType::Var]) {
             self.var_declaration()
         } else {
             self.statement()
@@ -285,6 +293,43 @@ impl<'a, W: Write> Parser<'a, W> {
                 Err(e)
             }
         }
+    }
+
+    fn function(&mut self, kind: &str) -> SResult {
+        let name = IdentifierToken::new_from_token(
+            self.consume(TokenType::Identifier(String::new()), &format!("Expect {kind} name."))?
+                .expect("Missing token after consuming it?"),
+        );
+
+        self.consume(TokenType::LeftParen, &format!("Expect '(' after {kind} name."))?;
+
+        let mut params = vec![];
+
+        if !self.check(&TokenType::RightParen) {
+            loop {
+                if params.len() >= 255 {
+                    let token = self.peek();
+                    self.error(token.line, token.token_display(), "Can't have more than 255 parameters.");
+                }
+
+                params.push(IdentifierToken::new_from_token(
+                    self.consume(TokenType::Identifier(String::new()), "Expect parameter name.")?
+                        .expect("Missing token after consuming it?"),
+                ));
+
+                if !self.matches_token(&[TokenType::Comma]) {
+                    break;
+                }
+            }
+        }
+
+        self.consume(TokenType::RightParen, &format!("Expect ')' after {kind} parameters."))?;
+
+        self.consume(TokenType::LeftBrace, &format!("Expect '{{' before {kind} body."))?;
+
+        let body = self.block()?;
+
+        Ok(Function::lift(name, params, body))
     }
 
     fn var_declaration(&mut self) -> SResult {
@@ -309,6 +354,8 @@ impl<'a, W: Write> Parser<'a, W> {
             self.if_statement()
         } else if self.matches_token(&[TokenType::Print]) {
             self.print_statement()
+        } else if self.matches_token(&[TokenType::Return]) {
+            self.return_statement()
         } else if self.matches_token(&[TokenType::While]) {
             self.looping_statement(Self::while_statement)
         } else if self.matches_token(&[TokenType::Break]) {
@@ -424,6 +471,18 @@ impl<'a, W: Write> Parser<'a, W> {
         Ok(Print::lift(expression))
     }
 
+    fn return_statement(&mut self) -> SResult {
+        let token = self.previous().expect("Empty previous after advancing?");
+        let error_tracking_token = ErrorTrackingToken::new("return".to_string(), token.line);
+        let value = if !self.check(&TokenType::Semicolon) {
+            Some(self.expression()?)
+        } else {
+            None
+        };
+        self.consume(TokenType::Semicolon, "Expect ';' after return.")?;
+        Ok(Return::lift(error_tracking_token, value))
+    }
+
     fn while_statement(&mut self) -> SResult {
         self.consume(TokenType::LeftParen, "Expect '(' before if's condition.")?;
         let condition = self.expression()?;
@@ -520,7 +579,8 @@ impl<'a, W: Write> Parser<'a, W> {
     }
 
     fn comma(&mut self) -> EResult {
-        self.left_associative_binary_op(&[TokenType::Comma], Self::equality)
+        // self.left_associative_binary_op(&[TokenType::Comma], Self::equality)
+        self.equality()
     }
 
     fn equality(&mut self) -> EResult {
@@ -609,9 +669,9 @@ impl<'a, W: Write> Parser<'a, W> {
             .line;
         Ok(Call::lift(
             expr,
-            CallerToken::new(CallerMarker::Open, open_paren_line),
+            ErrorTrackingToken::new("(".to_string(), open_paren_line),
             arguments,
-            CallerToken::new(CallerMarker::Close, close_paren_line),
+            ErrorTrackingToken::new(")".to_string(), close_paren_line),
         ))
     }
 
@@ -759,14 +819,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_comma() {
-        assert_eq!(
-            parse(scan_tokens(&"1, 2;").expect("Error scanning."), std::io::stderr())
-                .expect("Error parsing."),
-            single_expr(Binary::lift(literal_num(1.0), binary_token(BinaryOp::Comma), literal_num(2.0)))
-        )
-    }
+    // #[test]
+    // fn test_comma() {
+    //     assert_eq!(
+    //         parse(scan_tokens(&"1, 2;").expect("Error scanning."), std::io::stderr())
+    //             .expect("Error parsing."),
+    //         single_expr(Binary::lift(literal_num(1.0), binary_token(BinaryOp::Comma), literal_num(2.0)))
+    //     )
+    // }
 
     #[test]
     fn test_parse_complex() {

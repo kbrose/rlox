@@ -3,7 +3,7 @@ use anyhow::{Result, anyhow};
 use std::time::Instant;
 use std::{
     env,
-    io::{self, Write},
+    io::{self, Stdout, Write},
 };
 
 use crate::interpreter::{Interpreter, LoxObject};
@@ -54,8 +54,8 @@ fn run_prompt() -> Result<()> {
         }
 
         match run(&buffer, &mut interpreter, true) {
-            Ok(Some(value)) => println!("{value}"), // Show evaluated expressions
-            _ => {}                                 // Errors should have already been printed.
+            Ok(Some(value)) => println!("{}", value.to_string::<Stdout>()), // Show evaluated expressions
+            _ => {} // Errors should have already been printed.
         }
         buffer.clear(); // clear contents but keep allocated size
     }
