@@ -6,12 +6,11 @@ use std::{
     io::{self, Write},
 };
 
-use crate::interpreter::{Interpreter, LoxValue};
+use crate::interpreter::{Interpreter, LoxObject};
 
 #[macro_use]
 mod define_ast;
 mod ast;
-mod environment;
 mod interpreter;
 mod parser;
 mod scanner;
@@ -62,7 +61,7 @@ fn run_prompt() -> Result<()> {
     }
 }
 
-fn run<W: Write>(source: &str, interpreter: &mut Interpreter<W>, is_repl: bool) -> Result<Option<LoxValue>> {
+fn run<W: Write>(source: &str, interpreter: &mut Interpreter<W>, is_repl: bool) -> Result<Option<LoxObject>> {
     #[cfg(feature = "timings")]
     let timer = Instant::now();
 

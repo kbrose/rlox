@@ -1,9 +1,16 @@
 var a = 0;
 var temp;
 
+var start = clock();
+
 for (var b = 1; a < 10000; b = temp + b) {
   print a;
   temp = a;
   a = b;
-  if (a > 100) break;
+  // if (a > 100) break;
 }
+
+var end = clock();
+
+print "Duration:";
+print end - start;

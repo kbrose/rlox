@@ -2,11 +2,15 @@ use std::io::Write;
 
 use crate::{
     ast::{
-        Assign, Binary, Block, Break, Expr, Grouping, If, LiteralExpr, Logical, Print, Stmt, StmtExpression,
-        Unary, Var, Variable, While,
+        Assign, Binary, Block, Break, Call, Expr, Grouping, If, LiteralExpr, Logical, Print, Stmt,
+        StmtExpression, Unary, Var, Variable, While,
     },
-    parser::parsed_token::{
-        BinaryOp, BinaryToken, IdentifierToken, LogicalOp, LogicalToken, ParsedLiteral, UnaryOp, UnaryToken,
+    parser::{
+        CallerMarker, CallerToken,
+        parsed_token::{
+            BinaryOp, BinaryToken, IdentifierToken, LogicalOp, LogicalToken, ParsedLiteral, UnaryOp,
+            UnaryToken,
+        },
     },
     scanner::{Token, TokenType},
 };
@@ -54,8 +58,9 @@ type SResult = Result<Stmt, ParserError>;
 // comparison     → term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
 // term           → factor ( ( "-" | "+" ) factor )* ;
 // factor         → unary ( ( "/" | "*" ) unary )* ;
-// unary          → ( "!" | "-" ) unary
-//                | primary ;
+// unary          → ( "!" | "-" ) unary | call ;
+// call           → primary ( "(" arguments? ")" )* ;
+// arguments      → expression ( "," expression )* ;
 // primary        → NUMBER | STRING | "true" | "false" | "nil"
 //                | "(" expression ")" ;
 //                | IDENTIFIER
@@ -113,6 +118,7 @@ impl<'a, W: Write> Parser<'a, W> {
     }
 
     // TODO: It would be nice if this returned Option<...>: the item that passed the .check()
+    /// Checks if the next token matches any of the targets, and if so, consumes it.
     fn matches_token(&mut self, targets: &[TokenType]) -> bool {
         for target in targets {
             if self.check(target) {
@@ -124,6 +130,7 @@ impl<'a, W: Write> Parser<'a, W> {
     }
 
     // TODO: Should also return Option<...>?
+    /// Check if the next token is of the given type. Does not consume it either way.
     fn check(&self, token_type: &TokenType) -> bool {
         if self.is_at_end() {
             false
@@ -139,6 +146,8 @@ impl<'a, W: Write> Parser<'a, W> {
         }
     }
 
+    /// Consume the next token and attempts to return it.
+    /// `None` may be returned if the full program is just <EOF>
     fn advance(&mut self) -> Option<&Token> {
         if !self.is_at_end() {
             self.current += 1;
@@ -550,8 +559,60 @@ impl<'a, W: Write> Parser<'a, W> {
             let expression = self.unary()?;
             Ok(Unary::lift(operator, expression))
         } else {
-            self.primary()
+            self.call()
         }
+    }
+
+    fn call(&mut self) -> EResult {
+        let mut expr = self.primary()?;
+
+        // This is kind of an obtuse way of writing it, but the
+        // Crafting Interpreters author says it's in preparation
+        // for handling object properties later on.
+        loop {
+            if self.matches_token(&[TokenType::LeftParen]) {
+                let open_paren_line = self.previous().expect("No previous after matching").line;
+                expr = self.finish_call(expr, open_paren_line)?;
+            } else {
+                break;
+            }
+        }
+
+        Ok(expr)
+    }
+
+    fn finish_call(&mut self, expr: Expr, open_paren_line: usize) -> EResult {
+        let mut arguments = vec![];
+
+        if !self.check(&TokenType::RightParen) {
+            // TODO: Can we support trailing commas? Those are really nice.
+            loop {
+                if arguments.len() > 255 {
+                    let token = self.peek();
+
+                    self.error(
+                        token.line,
+                        token.token_type.pretty_print(),
+                        "Can't have more than 255 arguments.",
+                    );
+                }
+                arguments.push(self.expression()?);
+                if !self.matches_token(&[TokenType::Comma]) {
+                    break;
+                }
+            }
+        }
+
+        let close_paren_line = self
+            .consume(TokenType::RightParen, "Expected ')' after arguments")?
+            .expect("No token after consuming it?")
+            .line;
+        Ok(Call::lift(
+            expr,
+            CallerToken::new(CallerMarker::Open, open_paren_line),
+            arguments,
+            CallerToken::new(CallerMarker::Close, close_paren_line),
+        ))
     }
 
     fn primary(&mut self) -> EResult {

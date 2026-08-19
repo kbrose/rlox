@@ -32,6 +32,13 @@ pub(crate) fn pretty_print_expr(expr: &Expr) -> String {
                 pretty_print_expr(&logical.right)
             )
         }
+        Expr::Call(call) => {
+            format!(
+                "{}({})",
+                pretty_print_expr(&call.callee),
+                call.arguments.iter().map(pretty_print_expr).collect::<Vec<_>>().join(", ")
+            )
+        }
     }
 }
 

@@ -182,3 +182,39 @@ impl ParsedLiteral {
         }
     }
 }
+
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) enum CallerMarker {
+    Open,
+    Close,
+}
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) struct CallerToken {
+    marker: CallerMarker,
+    line: usize,
+}
+impl CallerToken {
+    pub(crate) fn new(marker: CallerMarker, line: usize) -> Self {
+        Self {
+            marker,
+            line,
+        }
+    }
+    pub(crate) fn marker(&self) -> &CallerMarker {
+        &self.marker
+    }
+    pub(crate) fn pretty_print(&self) -> String {
+        match self.marker {
+            CallerMarker::Open => "(".to_string(),
+            CallerMarker::Close => ")".to_string(),
+        }
+    }
+}
+impl TokenLike for CallerToken {
+    fn line(&self) -> usize {
+        self.line
+    }
+    fn token_display(&self) -> String {
+        self.pretty_print()
+    }
+}

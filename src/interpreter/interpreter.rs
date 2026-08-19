@@ -2,7 +2,12 @@ use std::fmt;
 
 use crate::{
     ast::{Expr, Stmt},
-    environment::Environment,
+    interpreter::{
+        callables::LoxCallable,
+        environment::Environment,
+        lox_object::{LoxObject, NativeFunction},
+    },
+    parser::IdentifierToken,
     scanner::TokenLike,
 };
 use anyhow::{Result as AnyhowResult, anyhow};
@@ -36,69 +41,6 @@ impl fmt::Display for RuntimeError {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) enum LoxValue {
-    Nil,
-    Boolean(bool),
-    Number(f64),
-    String(String),
-}
-
-impl fmt::Display for LoxValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Nil => write!(f, "nil"),
-            Self::Boolean(b) => write!(f, "{b}"),
-            Self::Number(x) => {
-                let s: String = x.to_string();
-                if s.ends_with(".0") {
-                    write!(f, "{}", s.split('.').next().unwrap())
-                } else {
-                    write!(f, "{}", s)
-                }
-            }
-            Self::String(s) => write!(f, "{}", s),
-        }
-    }
-}
-
-impl LoxValue {
-    fn truthiness(&self) -> bool {
-        match self {
-            LoxValue::Nil => false,
-            LoxValue::Boolean(b) => *b,
-            LoxValue::Number(_) => true,
-            LoxValue::String(_) => true,
-        }
-    }
-
-    fn get_number(&self) -> Result<f64, String> {
-        match self {
-            LoxValue::Number(x) => Ok(*x),
-            LoxValue::Nil => Err(String::from("Type error: expected Number, found Nil")),
-            LoxValue::Boolean(_) => Err(String::from("Type error: expected Number, found Boolean")),
-            LoxValue::String(_) => Err(String::from("Type error: expected Number, found String")),
-        }
-    }
-
-    fn get_string(&self) -> Result<&str, String> {
-        match self {
-            LoxValue::String(s) => Ok(s),
-            LoxValue::Number(_) => Err(String::from("Type error: expected String, found Number")),
-            LoxValue::Nil => Err(String::from("Type error: expected String, found Nil")),
-            LoxValue::Boolean(_) => Err(String::from("Type error: expected String, found Boolean")),
-        }
-    }
-
-    fn is_equal(&self, other: &Self) -> bool {
-        if let (Ok(a), Ok(b)) = (self.get_number(), other.get_number()) {
-            (a.is_nan() && b.is_nan()) || (a == b)
-        } else {
-            self == other
-        }
-    }
-}
-
 pub(crate) struct Interpreter<W: Write> {
     environment: Environment,
     writer: W,
@@ -106,21 +48,26 @@ pub(crate) struct Interpreter<W: Write> {
 
 impl<W: Write> Interpreter<W> {
     pub(crate) fn new(writer: W) -> Self {
+        let mut environment = Environment::new();
+        environment.define(
+            &IdentifierToken::new("clock".to_string(), 0),
+            LoxObject::NativeFunction(NativeFunction::Clock),
+        );
         Interpreter {
-            environment: Environment::new(),
+            environment: environment,
             writer,
         }
     }
 
-    pub(crate) fn evaluate(&mut self, expr: &Expr) -> Result<LoxValue, RuntimeError> {
+    pub(crate) fn evaluate(&mut self, expr: &Expr) -> Result<LoxObject, RuntimeError> {
         match expr {
             Expr::LiteralExpr(literal) => {
                 let out = match &literal.value {
-                    crate::parser::ParsedLiteral::Nil => LoxValue::Nil,
-                    crate::parser::ParsedLiteral::True => LoxValue::Boolean(true),
-                    crate::parser::ParsedLiteral::False => LoxValue::Boolean(false),
-                    crate::parser::ParsedLiteral::String(s) => LoxValue::String(s.clone()),
-                    crate::parser::ParsedLiteral::Number(x) => LoxValue::Number(*x),
+                    crate::parser::ParsedLiteral::Nil => LoxObject::Nil,
+                    crate::parser::ParsedLiteral::True => LoxObject::Boolean(true),
+                    crate::parser::ParsedLiteral::False => LoxObject::Boolean(false),
+                    crate::parser::ParsedLiteral::String(s) => LoxObject::String(s.clone()),
+                    crate::parser::ParsedLiteral::Number(x) => LoxObject::Number(*x),
                 };
                 Ok(out)
             }
@@ -129,8 +76,8 @@ impl<W: Write> Interpreter<W> {
                 let right = self.evaluate(&unary.expression)?;
 
                 let out = match &unary.operator.op() {
-                    crate::parser::UnaryOp::Bang => LoxValue::Boolean(!right.truthiness()),
-                    crate::parser::UnaryOp::Minus => LoxValue::Number(
+                    crate::parser::UnaryOp::Bang => LoxObject::Boolean(!right.truthiness()),
+                    crate::parser::UnaryOp::Minus => LoxObject::Number(
                         -right.get_number().map_err(|message| RuntimeError::new(&unary.operator, message))?,
                     ),
                 };
@@ -144,17 +91,17 @@ impl<W: Write> Interpreter<W> {
                 let err = |message: String| RuntimeError::new(&binary.operator, message);
 
                 match binary.operator.op() {
-                    crate::parser::BinaryOp::Minus => Ok(LoxValue::Number(
+                    crate::parser::BinaryOp::Minus => Ok(LoxObject::Number(
                         left.get_number().map_err(err)? - right.get_number().map_err(err)?,
                     )),
                     crate::parser::BinaryOp::Plus => {
                         if let (Ok(l), Ok(r)) = (left.get_number(), right.get_number()) {
-                            Ok(LoxValue::Number(l + r))
+                            Ok(LoxObject::Number(l + r))
                         } else if let (Ok(l), Ok(r)) = (left.get_string(), right.get_string()) {
                             let mut s = String::with_capacity(l.len() + r.len());
                             s.push_str(l);
                             s.push_str(r);
-                            Ok(LoxValue::String(s))
+                            Ok(LoxObject::String(s))
                         } else {
                             Err(err(String::from("Type error: + with incompatible types")))
                         }
@@ -164,26 +111,26 @@ impl<W: Write> Interpreter<W> {
                         if right == 0.0 {
                             Err(err(String::from("Division by zero")))
                         } else {
-                            Ok(LoxValue::Number(left.get_number().map_err(err)? / right))
+                            Ok(LoxObject::Number(left.get_number().map_err(err)? / right))
                         }
                     }
-                    crate::parser::BinaryOp::Star => Ok(LoxValue::Number(
+                    crate::parser::BinaryOp::Star => Ok(LoxObject::Number(
                         left.get_number().map_err(err)? * right.get_number().map_err(err)?,
                     )),
-                    crate::parser::BinaryOp::Greater => Ok(LoxValue::Boolean(
+                    crate::parser::BinaryOp::Greater => Ok(LoxObject::Boolean(
                         left.get_number().map_err(err)? > right.get_number().map_err(err)?,
                     )),
-                    crate::parser::BinaryOp::GreaterEqual => Ok(LoxValue::Boolean(
+                    crate::parser::BinaryOp::GreaterEqual => Ok(LoxObject::Boolean(
                         left.get_number().map_err(err)? >= right.get_number().map_err(err)?,
                     )),
-                    crate::parser::BinaryOp::Less => Ok(LoxValue::Boolean(
+                    crate::parser::BinaryOp::Less => Ok(LoxObject::Boolean(
                         left.get_number().map_err(err)? < right.get_number().map_err(err)?,
                     )),
-                    crate::parser::BinaryOp::LessEqual => Ok(LoxValue::Boolean(
+                    crate::parser::BinaryOp::LessEqual => Ok(LoxObject::Boolean(
                         left.get_number().map_err(err)? <= right.get_number().map_err(err)?,
                     )),
-                    crate::parser::BinaryOp::BangEqual => Ok(LoxValue::Boolean(!left.is_equal(&right))),
-                    crate::parser::BinaryOp::EqualEqual => Ok(LoxValue::Boolean(left.is_equal(&right))),
+                    crate::parser::BinaryOp::BangEqual => Ok(LoxObject::Boolean(!left.is_equal(&right))),
+                    crate::parser::BinaryOp::EqualEqual => Ok(LoxObject::Boolean(left.is_equal(&right))),
                     _ => panic!("Unexpected token type for binary!"), // TODO: Don't panic, make unrepresentable
                 }
             }
@@ -214,6 +161,29 @@ impl<W: Write> Interpreter<W> {
 
                 self.evaluate(&logical.right)
             }
+            Expr::Call(call) => {
+                let callee: Box<dyn LoxCallable<_>> = self
+                    .evaluate(&call.callee)?
+                    .get_callable::<W>()
+                    .map_err(|e| RuntimeError::new(&call.open_paren, e))?;
+
+                let num_args = call.arguments.len();
+                let arity = callee.arity();
+
+                if num_args != arity {
+                    return Err(RuntimeError::new(
+                        &call.open_paren,
+                        format!("Expected {arity} arguments, got {num_args}."),
+                    ));
+                }
+
+                let mut arguments: Vec<LoxObject> = Vec::with_capacity(num_args);
+                for argument in call.arguments.iter() {
+                    arguments.push(self.evaluate(argument)?)
+                }
+
+                callee.call(self, &arguments)
+            }
         }
     }
 
@@ -237,7 +207,7 @@ impl<W: Write> Interpreter<W> {
                 let value = if let Some(initializer) = &var.initializer {
                     self.evaluate(&initializer)
                 } else {
-                    Ok(LoxValue::Nil)
+                    Ok(LoxObject::Nil)
                 }?;
 
                 self.environment.define(&var.name, value);
@@ -311,7 +281,7 @@ mod tests {
 
     use super::*;
 
-    fn execute_str(s: &str) -> Result<LoxValue, RuntimeError> {
+    fn execute_str(s: &str) -> Result<LoxObject, RuntimeError> {
         let mut interpreter = Interpreter::new(std::io::stdout());
         let mut with_semicolon = String::with_capacity(s.len() + 1);
         with_semicolon.push_str(s);
@@ -328,7 +298,7 @@ mod tests {
         // interpret_expr(&)
     }
 
-    fn execute_stmt_and_expr(stmt: &str, expr: &str) -> Result<LoxValue, RuntimeError> {
+    fn execute_stmt_and_expr(stmt: &str, expr: &str) -> Result<LoxObject, RuntimeError> {
         let mut interpreter = Interpreter::new(std::io::stdout());
 
         interpreter
@@ -360,16 +330,16 @@ mod tests {
         String::from_utf8(interpreter.writer).expect("Error with UTF8 encoding")
     }
 
-    fn number(x: f64) -> LoxValue {
-        LoxValue::Number(x)
+    fn number(x: f64) -> LoxObject {
+        LoxObject::Number(x)
     }
 
-    fn string(s: &str) -> LoxValue {
-        LoxValue::String(String::from(s))
+    fn string(s: &str) -> LoxObject {
+        LoxObject::String(String::from(s))
     }
 
-    fn boolean(b: bool) -> LoxValue {
-        LoxValue::Boolean(b)
+    fn boolean(b: bool) -> LoxObject {
+        LoxObject::Boolean(b)
     }
 
     const INTER_ERR: &str = "interpret error";
@@ -427,8 +397,8 @@ mod tests {
         assert_eq!(execute_str(r#""Hi!" and 1"#).expect(INTER_ERR), number(1.0));
         assert_eq!(execute_str(r#"false and 1"#).expect(INTER_ERR), boolean(false));
         assert_eq!(execute_str(r#"1 and false"#).expect(INTER_ERR), boolean(false));
-        assert_eq!(execute_str(r#"1 and nil"#).expect(INTER_ERR), LoxValue::Nil);
-        assert_eq!(execute_str(r#"nil and 1"#).expect(INTER_ERR), LoxValue::Nil);
+        assert_eq!(execute_str(r#"1 and nil"#).expect(INTER_ERR), LoxObject::Nil);
+        assert_eq!(execute_str(r#"nil and 1"#).expect(INTER_ERR), LoxObject::Nil);
 
         assert_eq!(execute_str("1 or 2").expect(INTER_ERR), number(1.0));
         assert_eq!(execute_str(r#""Hi!" or 1"#).expect(INTER_ERR), string("Hi!"));
@@ -436,7 +406,7 @@ mod tests {
         assert_eq!(execute_str(r#"false or true"#).expect(INTER_ERR), boolean(true));
         assert_eq!(execute_str(r#"false or false"#).expect(INTER_ERR), boolean(false));
         assert_eq!(execute_str(r#"nil or false"#).expect(INTER_ERR), boolean(false));
-        assert_eq!(execute_str(r#"false or nil"#).expect(INTER_ERR), LoxValue::Nil);
+        assert_eq!(execute_str(r#"false or nil"#).expect(INTER_ERR), LoxObject::Nil);
     }
 
     #[test]
@@ -471,7 +441,7 @@ mod tests {
 
     #[test]
     fn test_variables() {
-        assert_eq!(LoxValue::Nil, execute_stmt_and_expr("var x;", "x;").expect("Error"));
+        assert_eq!(LoxObject::Nil, execute_stmt_and_expr("var x;", "x;").expect("Error"));
         assert_eq!(number(1.0), execute_stmt_and_expr("var x = 1;", "x;").expect("Error"));
         assert_eq!(string("Hi!"), execute_stmt_and_expr(r#"var x = "Hi!";"#, "x;").expect("Error"));
     }
