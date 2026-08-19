@@ -1,7 +1,8 @@
 use crate::ast::Function;
+use crate::interpreter::EnvT;
 use crate::interpreter::callables::LoxCallable;
-use crate::interpreter::environment::Environment;
 use std::io::Write;
+use std::rc::Rc;
 use std::time::SystemTime;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -125,15 +126,23 @@ impl<W: Write> LoxCallable<W> for NativeFunction {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Clone)]
 pub(crate) struct LoxFunction {
     declaration: Function,
+    closure: EnvT,
+}
+
+impl PartialEq for LoxFunction {
+    fn eq(&self, other: &Self) -> bool {
+        self.declaration == other.declaration
+    }
 }
 
 impl LoxFunction {
-    pub(crate) fn new(declaration: Function) -> Self {
+    pub(crate) fn new(declaration: Function, closure: EnvT) -> Self {
         Self {
             declaration,
+            closure: closure,
         }
     }
 }
@@ -144,16 +153,16 @@ impl<W: Write> LoxCallable<W> for LoxFunction {
         interpreter: &mut crate::interpreter::Interpreter<W>,
         args: Vec<LoxObject>,
     ) -> Result<LoxObject, crate::interpreter::interpreter::EvaluationException> {
-        let mut env = Environment::new_with_global(interpreter.global_env());
+        let mut env = super::environment::new_scope(&Rc::clone(&self.closure));
 
+        // We have verified their lengths match elsewhere.
+        // TODO: Any way to use "parse don't validate" here?
         for (param_identifier, param_value) in self.declaration.params.iter().zip(args.into_iter()) {
-            env.define(param_identifier, param_value);
+            env.borrow_mut().define(param_identifier, param_value);
         }
 
-        let old_env = interpreter.environment.clone();
-        interpreter.environment = env;
-        let out = interpreter.execute_stmt(&self.declaration.body);
-        interpreter.environment = old_env;
+        let out = interpreter.execute_stmt(&self.declaration.body, &mut env);
+
         out?;
 
         Ok(LoxObject::Nil)

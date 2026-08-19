@@ -1,82 +1,67 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::interpreter::RuntimeError;
+use crate::interpreter::lox_object::NativeFunction;
 use crate::{interpreter::lox_object::LoxObject, parser::IdentifierToken};
 
-#[derive(Clone)]
+pub(crate) type EnvT = Rc<RefCell<Environment>>;
+
+#[derive(Clone, Debug)]
 pub(crate) struct Environment {
-    global: HashMap<String, LoxObject>,
-    scopes: Vec<HashMap<String, LoxObject>>,
+    scope: HashMap<String, LoxObject>,
+    child: Option<Rc<RefCell<Environment>>>,
+}
+
+pub(super) fn new_scope(environment: &Rc<RefCell<Environment>>) -> EnvT {
+    Rc::new(RefCell::new(Environment {
+        scope: HashMap::new(),
+        child: Some(Rc::clone(environment)),
+    }))
 }
 
 impl Environment {
-    pub(crate) fn new() -> Self {
-        Environment {
-            global: HashMap::new(),
-            scopes: vec![],
-        }
-    }
-
-    pub(crate) fn new_with_global(global: HashMap<String, LoxObject>) -> Self {
-        Environment {
-            global,
-            scopes: vec![],
-        }
-    }
-
-    pub(super) fn global(&self) -> HashMap<String, LoxObject> {
-        self.global.clone()
-    }
-
-    fn innermost(&mut self) -> &mut HashMap<String, LoxObject> {
-        if let Some(scope) = self.scopes.last_mut() {
-            scope
-        } else {
-            &mut self.global
-        }
-    }
-
-    /// Iterate over the scopes in reverse order (most nested first).
-    fn iter_scopes(&self) -> impl Iterator<Item = &HashMap<String, LoxObject>> {
-        self.scopes.iter().rev().chain(std::iter::once(&self.global))
-    }
-
-    /// Iterate over the scopes in reverse order (most nested first).
-    fn iter_scopes_mut(&mut self) -> impl Iterator<Item = &mut HashMap<String, LoxObject>> {
-        self.scopes.iter_mut().rev().chain(std::iter::once(&mut self.global))
-    }
-
-    pub(crate) fn enter_scope(&mut self) {
-        self.scopes.push(HashMap::new());
-    }
-
-    pub(crate) fn exit_scope(&mut self) {
-        debug_assert!(self.scopes.len() > 0);
-        self.scopes.pop();
+    pub(crate) fn new_root() -> Self {
+        let mut env = Environment {
+            scope: HashMap::new(),
+            child: None,
+        };
+        env.define(
+            &IdentifierToken::new("clock".to_string(), 0),
+            LoxObject::NativeFunction(NativeFunction::Clock),
+        );
+        env
     }
 
     pub(crate) fn define(&mut self, name: &IdentifierToken, value: LoxObject) {
-        self.innermost().insert(name.identifier().to_string(), value);
+        self.scope.insert(name.identifier().to_string(), value);
     }
 
     pub(crate) fn assign(&mut self, name: &IdentifierToken, value: LoxObject) -> Result<(), ()> {
         let key = name.identifier().to_string();
-        for scope in self.iter_scopes_mut() {
-            if scope.contains_key(&key) {
-                scope.insert(key, value);
-                return Ok(());
-            }
+        self.assign_key_value(key, value)
+    }
+
+    fn assign_key_value(&mut self, key: String, value: LoxObject) -> Result<(), ()> {
+        if self.scope.contains_key(&key) {
+            self.scope.insert(key, value);
+            Ok(())
+        } else if let Some(child) = &mut self.child {
+            child.borrow_mut().assign_key_value(key, value)
+        } else {
+            Err(())
         }
-        Err(())
     }
 
     pub(crate) fn get(&self, name: &IdentifierToken) -> Result<LoxObject, RuntimeError> {
-        for scope in self.iter_scopes() {
-            if let Some(value) = scope.get(name.identifier()) {
-                return Ok(value.clone()); // TODO: Can we avoid clone here?
-            }
+        let key = name.identifier();
+        if let Some(value) = self.scope.get(key) {
+            return Ok(value.clone()); // TODO: Can we avoid clone?
+        } else if let Some(child) = &self.child {
+            child.borrow().get(name)
+        } else {
+            Err(RuntimeError::new(name, "Unknown variable".to_string()))
         }
-
-        Err(RuntimeError::new(name, "Unknown variable".to_string()))
     }
 }

@@ -1,13 +1,13 @@
-use std::{collections::HashMap, fmt};
+use std::{cell::RefCell, fmt, rc::Rc};
 
 use crate::{
     ast::{Expr, Stmt},
     interpreter::{
+        EnvT,
         callables::LoxCallable,
         environment::Environment,
-        lox_object::{LoxFunction, LoxObject, NativeFunction},
+        lox_object::{LoxFunction, LoxObject},
     },
-    parser::IdentifierToken,
     scanner::TokenLike,
 };
 use anyhow::{Result as AnyhowResult, anyhow};
@@ -54,28 +54,28 @@ impl fmt::Display for RuntimeError {
 }
 
 pub(crate) struct Interpreter<W: Write> {
-    pub(super) environment: Environment,
     writer: W,
+}
+
+pub(crate) fn new_interpreter_and_environment<W>(writer: W) -> (Interpreter<W>, Rc<RefCell<Environment>>)
+where
+    W: Write,
+{
+    (Interpreter::new(writer), Rc::new(RefCell::new(Environment::new_root())))
 }
 
 impl<W: Write> Interpreter<W> {
     pub(crate) fn new(writer: W) -> Self {
-        let mut environment = Environment::new();
-        environment.define(
-            &IdentifierToken::new("clock".to_string(), 0),
-            LoxObject::NativeFunction(NativeFunction::Clock),
-        );
         Interpreter {
-            environment: environment,
             writer,
         }
     }
 
-    pub(super) fn global_env(&self) -> HashMap<String, LoxObject> {
-        self.environment.global()
-    }
-
-    pub(crate) fn evaluate(&mut self, expr: &Expr) -> Result<LoxObject, EvaluationException> {
+    pub(crate) fn evaluate(
+        &mut self,
+        expr: &Expr,
+        environment: &EnvT,
+    ) -> Result<LoxObject, EvaluationException> {
         match expr {
             Expr::LiteralExpr(literal) => {
                 let out = match &literal.value {
@@ -87,9 +87,9 @@ impl<W: Write> Interpreter<W> {
                 };
                 Ok(out)
             }
-            Expr::Grouping(grouping) => self.evaluate(&grouping.expression),
+            Expr::Grouping(grouping) => self.evaluate(&grouping.expression, environment),
             Expr::Unary(unary) => {
-                let right = self.evaluate(&unary.expression)?;
+                let right = self.evaluate(&unary.expression, environment)?;
 
                 let out = match &unary.operator.op() {
                     crate::parser::UnaryOp::Bang => LoxObject::Boolean(!right.truthiness()),
@@ -101,8 +101,8 @@ impl<W: Write> Interpreter<W> {
                 Ok(out)
             }
             Expr::Binary(binary) => {
-                let left = self.evaluate(&binary.left)?;
-                let right = self.evaluate(&binary.right)?;
+                let left = self.evaluate(&binary.left, environment)?;
+                let right = self.evaluate(&binary.right, environment)?;
 
                 let err = |message: String| {
                     EvaluationException::RuntimeError(RuntimeError::new(&binary.operator, message))
@@ -152,17 +152,17 @@ impl<W: Write> Interpreter<W> {
                     _ => panic!("Unexpected token type for binary!"), // TODO: Don't panic, make unrepresentable
                 }
             }
-            Expr::Variable(variable) => self.environment.get(&variable.name).map_err(|e| e.into()),
+            Expr::Variable(variable) => environment.borrow().get(&variable.name).map_err(|e| e.into()),
             Expr::Assign(assign) => {
-                let value = self.evaluate(&assign.value)?;
+                let value = self.evaluate(&assign.value, environment)?;
                 // TODO: Any way to avoid the clone here?
-                match self.environment.assign(&assign.name, value.clone()) {
+                match environment.borrow_mut().assign(&assign.name, value.clone()) {
                     Ok(()) => Ok(value),
                     Err(()) => Err(RuntimeError::new(&assign.name, "Undefined variable".to_string()).into()),
                 }
             }
             Expr::Logical(logical) => {
-                let left = self.evaluate(&logical.left)?;
+                let left = self.evaluate(&logical.left, environment)?;
 
                 match logical.operator.op() {
                     crate::parser::LogicalOp::And => {
@@ -177,11 +177,11 @@ impl<W: Write> Interpreter<W> {
                     }
                 }
 
-                self.evaluate(&logical.right)
+                self.evaluate(&logical.right, environment)
             }
             Expr::Call(call) => {
                 let callee: Box<dyn LoxCallable<_>> = self
-                    .evaluate(&call.callee)?
+                    .evaluate(&call.callee, environment)?
                     .get_callable::<W>()
                     .map_err(|e| RuntimeError::new(&call.open_paren, e))?;
 
@@ -198,7 +198,7 @@ impl<W: Write> Interpreter<W> {
 
                 let mut arguments: Vec<LoxObject> = Vec::with_capacity(num_args);
                 for argument in call.arguments.iter() {
-                    arguments.push(self.evaluate(argument)?)
+                    arguments.push(self.evaluate(argument, environment)?)
                 }
 
                 match callee.call(self, arguments) {
@@ -210,14 +210,18 @@ impl<W: Write> Interpreter<W> {
         }
     }
 
-    pub(super) fn execute_stmt(&mut self, stmt: &Stmt) -> Result<LoopControlFlow, EvaluationException> {
+    pub(super) fn execute_stmt(
+        &mut self,
+        stmt: &Stmt,
+        environment: &EnvT,
+    ) -> Result<LoopControlFlow, EvaluationException> {
         match stmt {
             Stmt::StmtExpression(stmt_expression) => {
-                self.evaluate(&stmt_expression.expression)?;
+                self.evaluate(&stmt_expression.expression, environment)?;
                 Ok(LoopControlFlow::Normal)
             }
             Stmt::Print(print) => {
-                let value = self.evaluate(&print.expression)?;
+                let value = self.evaluate(&print.expression, environment)?;
                 writeln!(self.writer, "{}", value.to_string::<W>()).map(|_| LoopControlFlow::Normal).map_err(
                     |e| {
                         RuntimeError {
@@ -231,50 +235,46 @@ impl<W: Write> Interpreter<W> {
             }
             Stmt::Var(var) => {
                 let value = if let Some(initializer) = &var.initializer {
-                    self.evaluate(&initializer)
+                    self.evaluate(&initializer, environment)
                 } else {
                     Ok(LoxObject::Nil)
                 }?;
 
-                self.environment.define(&var.name, value);
+                environment.borrow_mut().define(&var.name, value);
 
                 Ok(LoopControlFlow::Normal)
             }
             Stmt::Block(block) => {
-                self.environment.enter_scope();
-                let mut out = Ok(LoopControlFlow::Normal);
+                let environment = crate::interpreter::environment::new_scope(&Rc::clone(environment));
                 for statement in block.statements.iter() {
-                    match self.execute_stmt(statement) {
+                    match self.execute_stmt(statement, &Rc::clone(&environment)) {
                         Ok(control_flow) => {
                             match control_flow {
                                 LoopControlFlow::Normal => {}
                                 LoopControlFlow::Break => {
-                                    out = Ok(control_flow);
-                                    break;
+                                    return Ok(control_flow);
                                 }
                             };
                         }
                         Err(runtime_error) => {
-                            out = Err(runtime_error);
-                            break;
+                            return Err(runtime_error);
                         }
                     }
                 }
-                self.environment.exit_scope();
-                out
+                Ok(LoopControlFlow::Normal)
             }
             Stmt::If(if_stmt) => {
-                if self.evaluate(&if_stmt.condition)?.truthiness() {
-                    self.execute_stmt(&if_stmt.then_branch)
+                if self.evaluate(&if_stmt.condition, environment)?.truthiness() {
+                    self.execute_stmt(&if_stmt.then_branch, environment)
                 } else if let Some(else_stmt) = &if_stmt.else_branch {
-                    self.execute_stmt(else_stmt)
+                    self.execute_stmt(else_stmt, environment)
                 } else {
                     Ok(LoopControlFlow::Normal)
                 }
             }
             Stmt::While(while_stmt) => {
-                while self.evaluate(&while_stmt.condition)?.truthiness() {
-                    match self.execute_stmt(&while_stmt.body)? {
+                while self.evaluate(&while_stmt.condition, environment)?.truthiness() {
+                    match self.execute_stmt(&while_stmt.body, environment)? {
                         LoopControlFlow::Normal => {}
                         LoopControlFlow::Break => {
                             break;
@@ -285,13 +285,15 @@ impl<W: Write> Interpreter<W> {
             }
             Stmt::Break(_) => Ok(LoopControlFlow::Break),
             Stmt::Function(function) => {
-                self.environment
-                    .define(&function.name, LoxObject::LoxFunction(LoxFunction::new((**function).clone())));
+                let closure = crate::interpreter::environment::new_scope(&Rc::clone(environment));
+                let defined_function =
+                    LoxObject::LoxFunction(LoxFunction::new((**function).clone(), closure));
+                environment.borrow_mut().define(&function.name, defined_function);
                 Ok(LoopControlFlow::Normal)
             }
             Stmt::Return(return_stmt) => {
                 let out = match &return_stmt.value {
-                    Some(expr) => self.evaluate(&expr)?,
+                    Some(expr) => self.evaluate(&expr, environment)?,
                     None => LoxObject::Nil,
                 };
                 Err(EvaluationException::Return(out))
@@ -299,15 +301,14 @@ impl<W: Write> Interpreter<W> {
         }
     }
 
-    // This will have to be converted into an Interpreter struct once we have global vars
-    // that should be preserved across runs in the REPL. Or alternatively, some kind of
-    // &mut Globals passed in or something like that.
-    pub(crate) fn interpret(&mut self, stmts: &[Stmt]) -> AnyhowResult<()> {
+    pub(crate) fn interpret(&mut self, stmts: &[Stmt], environment: &EnvT) -> AnyhowResult<()> {
         for stmt in stmts {
-            self.execute_stmt(stmt).map_err(|e| {
+            self.execute_stmt(stmt, environment).map_err(|e| {
                 match e {
                     EvaluationException::Return(_) => {
-                        eprintln!("Encountered return outside of function");
+                        panic!(
+                            "Encountered return outside of function, should have been caught as syntax error"
+                        );
                     }
                     EvaluationException::RuntimeError(runtime_error) => {
                         eprintln!("{runtime_error}");
@@ -326,8 +327,9 @@ mod tests {
 
     use super::*;
 
+    /// Run the given expression and return the result.
     fn execute_str(s: &str) -> Result<LoxObject, EvaluationException> {
-        let mut interpreter = Interpreter::new(std::io::stdout());
+        let (mut interpreter, mut environment) = new_interpreter_and_environment(std::io::stdout());
         let mut with_semicolon = String::with_capacity(s.len() + 1);
         with_semicolon.push_str(s);
         with_semicolon.push(';');
@@ -335,40 +337,47 @@ mod tests {
             parse(scan_tokens(&with_semicolon).expect("scan error"), std::io::stderr()).expect("parse error");
         assert!(parsed.len() == 1);
         match parsed.first().unwrap() {
-            Stmt::StmtExpression(stmt_expression) => interpreter.evaluate(&stmt_expression.expression),
+            Stmt::StmtExpression(stmt_expression) => {
+                interpreter.evaluate(&stmt_expression.expression, &mut environment)
+            }
             _ => {
                 panic!("Expected statement expression")
             }
         }
-        // interpret_expr(&)
     }
 
+    /// Execute the statements, then evaluate the expression and return the result.
     fn execute_stmt_and_expr(stmt: &str, expr: &str) -> Result<LoxObject, EvaluationException> {
-        let mut interpreter = Interpreter::new(std::io::stdout());
+        let (mut interpreter, mut environment) = new_interpreter_and_environment(std::io::stdout());
 
         interpreter
             .interpret(
                 &parse(scan_tokens(stmt).expect("scan error"), std::io::stderr()).expect("parse error"),
+                &mut environment,
             )
             .expect("interpreting error");
 
         let parsed = parse(scan_tokens(expr).expect("scan error"), std::io::stderr()).expect("parse error");
         assert!(parsed.len() == 1);
         match parsed.first().unwrap() {
-            Stmt::StmtExpression(stmt_expression) => interpreter.evaluate(&stmt_expression.expression),
+            Stmt::StmtExpression(stmt_expression) => {
+                interpreter.evaluate(&stmt_expression.expression, &mut environment)
+            }
             _ => {
                 panic!("Expected statement expression")
             }
         }
     }
 
+    /// Execute the statements and return everything written out.
     fn execute_stmts(stmt: &str) -> String {
         let buffer = Vec::new();
-        let mut interpreter = Interpreter::new(buffer);
+        let (mut interpreter, mut environment) = new_interpreter_and_environment(buffer);
 
         interpreter
             .interpret(
                 &parse(scan_tokens(stmt).expect("scan error"), std::io::stderr()).expect("parse error"),
+                &mut environment,
             )
             .expect("interpreting error");
 
@@ -645,6 +654,30 @@ mod tests {
                 }
 
                 print fib(10);
+                "#
+            )
+        )
+    }
+
+    #[test]
+    fn test_function_closures() {
+        assert_eq!(
+            String::from("1\n2\n"),
+            execute_stmts(
+                r#"
+                fun makeCounter() {
+                  var i = 0;
+                  fun count() {
+                    i = i + 1;
+                    print i;
+                  }
+
+                  return count;
+                }
+
+                var counter = makeCounter();
+                counter(); // "1".
+                counter(); // "2".
                 "#
             )
         )

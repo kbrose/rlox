@@ -76,6 +76,7 @@ struct Parser<'a, W: Write> {
     parse_error: bool,
     error_writer: &'a mut W,
     loop_level: u8,
+    function_level: u8,
 }
 
 #[derive(Debug)]
@@ -101,6 +102,7 @@ impl<'a, W: Write> Parser<'a, W> {
             parse_error: false,
             error_writer,
             loop_level: 0,
+            function_level: 0,
         }
     }
 
@@ -327,9 +329,48 @@ impl<'a, W: Write> Parser<'a, W> {
 
         self.consume(TokenType::LeftBrace, &format!("Expect '{{' before {kind} body."))?;
 
-        let body = self.block()?;
+        let body = self.returnable_statement(Self::block)?;
 
         Ok(Function::lift(name, params, body))
+    }
+
+    fn returnable_statement<F>(&mut self, mut f: F) -> SResult
+    where
+        F: FnMut(&mut Self) -> SResult,
+    {
+        self.increment_function_level()?;
+        let out = f(self);
+        self.decrement_function_level();
+        out
+    }
+
+    fn increment_function_level(&mut self) -> Result<(), ParserError> {
+        match self.function_level.checked_add(1) {
+            Some(i) => {
+                self.function_level = i;
+                Ok(())
+            }
+            None => {
+                let token = &self.tokens[self.current.checked_sub(1).unwrap_or(0)];
+                self.error(
+                    token.line,
+                    token.token_type.pretty_print(),
+                    "Only 256 levels of function nesting are supported.",
+                );
+                Err(ParserError {})
+            }
+        }
+    }
+
+    fn decrement_function_level(&mut self) {
+        match self.function_level.checked_sub(1) {
+            Some(i) => {
+                self.function_level = i;
+            }
+            None => {
+                panic!("Function level falling below zero, this should be impossible.");
+            }
+        }
     }
 
     fn var_declaration(&mut self) -> SResult {
@@ -472,15 +513,25 @@ impl<'a, W: Write> Parser<'a, W> {
     }
 
     fn return_statement(&mut self) -> SResult {
-        let token = self.previous().expect("Empty previous after advancing?");
-        let error_tracking_token = ErrorTrackingToken::new("return".to_string(), token.line);
-        let value = if !self.check(&TokenType::Semicolon) {
-            Some(self.expression()?)
+        let return_token = self.previous().expect("Empty previous after advancing?");
+
+        if self.function_level > 0 {
+            let error_tracking_token = ErrorTrackingToken::new("return".to_string(), return_token.line);
+            let value = if !self.check(&TokenType::Semicolon) {
+                Some(self.expression()?)
+            } else {
+                None
+            };
+            self.consume(TokenType::Semicolon, "Expect ';' after return.")?;
+            Ok(Return::lift(error_tracking_token, value))
         } else {
-            None
-        };
-        self.consume(TokenType::Semicolon, "Expect ';' after return.")?;
-        Ok(Return::lift(error_tracking_token, value))
+            self.error(
+                return_token.line,
+                return_token.token_display(),
+                "return statement must occur inside function body",
+            );
+            Err(ParserError {})
+        }
     }
 
     fn while_statement(&mut self) -> SResult {
@@ -875,9 +926,9 @@ mod tests {
 
     #[test]
     fn test_parse_errors() {
-        assert!(parse(scan_tokens(&"+123;").expect("Error scanning"), std::io::stderr()).is_err());
-        assert!(parse(scan_tokens(&"class;").expect("Error scanning"), std::io::stderr()).is_err());
-        assert!(parse(scan_tokens(&"break;").expect("Error scanning"), std::io::stderr()).is_err());
+        assert!(parse(scan_tokens(&"+123;").expect("Error scanning"), std::io::sink()).is_err());
+        assert!(parse(scan_tokens(&"class;").expect("Error scanning"), std::io::sink()).is_err());
+        assert!(parse(scan_tokens(&"break;").expect("Error scanning"), std::io::sink()).is_err());
     }
 
     #[test]

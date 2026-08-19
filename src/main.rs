@@ -6,7 +6,7 @@ use std::{
     io::{self, Stdout, Write},
 };
 
-use crate::interpreter::{Interpreter, LoxObject};
+use crate::interpreter::{EnvT, Interpreter, LoxObject, new_interpreter_and_environment};
 
 #[macro_use]
 mod define_ast;
@@ -32,9 +32,9 @@ fn run_file(path: &String) -> Result<()> {
         anyhow!("")
     })?;
 
-    let mut interpreter = Interpreter::new(std::io::stdout());
+    let (mut interpreter, environment) = new_interpreter_and_environment(std::io::stdout());
 
-    run(&input, &mut interpreter, false)?;
+    run(&input, &mut interpreter, &environment, false)?;
 
     Ok(())
 }
@@ -43,7 +43,7 @@ fn run_prompt() -> Result<()> {
     let mut buffer = String::new();
     let stdin = io::stdin();
     println!("Welcome to rlox! Press Ctrl-D to exit.");
-    let mut interpreter = Interpreter::new(std::io::stdout());
+    let (mut interpreter, environment) = new_interpreter_and_environment(std::io::stdout());
     loop {
         print!("> ");
         std::io::stdout().flush()?;
@@ -53,7 +53,7 @@ fn run_prompt() -> Result<()> {
             break Ok(());
         }
 
-        match run(&buffer, &mut interpreter, true) {
+        match run(&buffer, &mut interpreter, &environment, true) {
             Ok(Some(value)) => println!("{}", value.to_string::<Stdout>()), // Show evaluated expressions
             _ => {} // Errors should have already been printed.
         }
@@ -61,7 +61,12 @@ fn run_prompt() -> Result<()> {
     }
 }
 
-fn run<W: Write>(source: &str, interpreter: &mut Interpreter<W>, is_repl: bool) -> Result<Option<LoxObject>> {
+fn run<W: Write>(
+    source: &str,
+    interpreter: &mut Interpreter<W>,
+    environment: &EnvT,
+    is_repl: bool,
+) -> Result<Option<LoxObject>> {
     #[cfg(feature = "timings")]
     let timer = Instant::now();
 
@@ -84,7 +89,7 @@ fn run<W: Write>(source: &str, interpreter: &mut Interpreter<W>, is_repl: bool) 
 
         match parse {
             parser::ReplParseOutput::Statements(statements) => {
-                interpreter.interpret(&statements)?;
+                interpreter.interpret(&statements, &environment)?;
 
                 #[cfg(feature = "timings")]
                 println!("Parsing: {:?}", timer.elapsed());
@@ -92,7 +97,7 @@ fn run<W: Write>(source: &str, interpreter: &mut Interpreter<W>, is_repl: bool) 
                 Ok(None)
             }
             parser::ReplParseOutput::Expr(expr) => {
-                let evaluated = interpreter.evaluate(&expr);
+                let evaluated = interpreter.evaluate(&expr, &environment);
 
                 #[cfg(feature = "timings")]
                 println!("Parsing: {:?}", timer.elapsed());
@@ -112,7 +117,7 @@ fn run<W: Write>(source: &str, interpreter: &mut Interpreter<W>, is_repl: bool) 
             Instant::now()
         };
 
-        interpreter.interpret(&statements)?;
+        interpreter.interpret(&statements, environment)?;
 
         #[cfg(feature = "timings")]
         println!("Parsing: {:?}", timer.elapsed());
