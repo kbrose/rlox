@@ -6,15 +6,15 @@ use crate::interpreter::RuntimeError;
 use crate::interpreter::lox_object::NativeFunction;
 use crate::{interpreter::lox_object::LoxObject, parser::IdentifierToken};
 
-pub(crate) type EnvT = Rc<RefCell<Environment>>;
+pub(crate) type EnvironmentWrapper = Rc<RefCell<Environment>>;
 
 #[derive(Clone, Debug)]
 pub(crate) struct Environment {
     scope: HashMap<String, LoxObject>,
-    child: Option<Rc<RefCell<Environment>>>,
+    child: Option<EnvironmentWrapper>,
 }
 
-pub(super) fn new_scope(environment: &Rc<RefCell<Environment>>) -> EnvT {
+pub(super) fn new_scope(environment: &EnvironmentWrapper) -> EnvironmentWrapper {
     Rc::new(RefCell::new(Environment {
         scope: HashMap::new(),
         child: Some(Rc::clone(environment)),

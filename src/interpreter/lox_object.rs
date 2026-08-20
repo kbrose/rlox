@@ -1,6 +1,7 @@
 use crate::ast::Function;
-use crate::interpreter::EnvT;
-use crate::interpreter::callables::LoxCallable;
+use crate::interpreter::callables::{ArgLengthMismatch, LoxCallable};
+use crate::interpreter::{EnvironmentWrapper, EvaluationException, Interpreter};
+use crate::parser::IdentifierToken;
 use std::io::Write;
 use std::rc::Rc;
 use std::time::SystemTime;
@@ -14,11 +15,6 @@ pub(crate) enum LoxObject {
     NativeFunction(NativeFunction),
     LoxFunction(LoxFunction),
 }
-
-// impl fmt::Display for LoxObject {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//     }
-// }
 
 impl LoxObject {
     pub(crate) fn truthiness(&self) -> bool {
@@ -99,9 +95,9 @@ pub(crate) enum NativeFunction {
 impl<W: Write> LoxCallable<W> for NativeFunction {
     fn call(
         self: &Self,
-        _interpreter: &mut crate::interpreter::Interpreter<W>,
-        _args: Vec<LoxObject>,
-    ) -> Result<LoxObject, crate::interpreter::interpreter::EvaluationException> {
+        _interpreter: &mut Interpreter<W>,
+        _parsed_args: Vec<(&IdentifierToken, LoxObject)>,
+    ) -> Result<LoxObject, EvaluationException> {
         match self {
             Self::Clock => {
                 let now = SystemTime::now();
@@ -115,9 +111,14 @@ impl<W: Write> LoxCallable<W> for NativeFunction {
         }
     }
 
-    fn arity(self: &Self) -> usize {
-        match self {
-            Self::Clock => 0,
+    fn align_arguments(
+        self: &Self,
+        arguments: Vec<LoxObject>,
+    ) -> Result<Vec<(&IdentifierToken, LoxObject)>, ArgLengthMismatch> {
+        if arguments.len() > 0 {
+            Err(ArgLengthMismatch::new(0, arguments.len()))
+        } else {
+            Ok(vec![])
         }
     }
 
@@ -129,7 +130,7 @@ impl<W: Write> LoxCallable<W> for NativeFunction {
 #[derive(Debug, Clone)]
 pub(crate) struct LoxFunction {
     declaration: Function,
-    closure: EnvT,
+    closure: EnvironmentWrapper,
 }
 
 impl PartialEq for LoxFunction {
@@ -139,7 +140,7 @@ impl PartialEq for LoxFunction {
 }
 
 impl LoxFunction {
-    pub(crate) fn new(declaration: Function, closure: EnvT) -> Self {
+    pub(crate) fn new(declaration: Function, closure: EnvironmentWrapper) -> Self {
         Self {
             declaration,
             closure: closure,
@@ -150,14 +151,14 @@ impl LoxFunction {
 impl<W: Write> LoxCallable<W> for LoxFunction {
     fn call(
         self: &Self,
-        interpreter: &mut crate::interpreter::Interpreter<W>,
-        args: Vec<LoxObject>,
+        interpreter: &mut Interpreter<W>,
+        parsed_args: Vec<(&IdentifierToken, LoxObject)>,
     ) -> Result<LoxObject, crate::interpreter::interpreter::EvaluationException> {
         let mut env = super::environment::new_scope(&Rc::clone(&self.closure));
 
         // We have verified their lengths match elsewhere.
         // TODO: Any way to use "parse don't validate" here?
-        for (param_identifier, param_value) in self.declaration.params.iter().zip(args.into_iter()) {
+        for (param_identifier, param_value) in parsed_args.into_iter() {
             env.borrow_mut().define(param_identifier, param_value);
         }
 
@@ -168,8 +169,18 @@ impl<W: Write> LoxCallable<W> for LoxFunction {
         Ok(LoxObject::Nil)
     }
 
-    fn arity(self: &Self) -> usize {
-        self.declaration.params.len()
+    fn align_arguments(
+        self: &Self,
+        arguments: Vec<LoxObject>,
+    ) -> Result<Vec<(&IdentifierToken, LoxObject)>, ArgLengthMismatch> {
+        let arity = self.declaration.params.len();
+        let num_args = arguments.len();
+
+        if arity != num_args {
+            Err(ArgLengthMismatch::new(arity, num_args))
+        } else {
+            Ok(self.declaration.params.iter().zip(arguments.into_iter()).collect())
+        }
     }
 
     fn to_string(self: &Self) -> String {

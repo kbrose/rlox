@@ -6,7 +6,7 @@ use std::{
     io::{self, Stdout, Write},
 };
 
-use crate::interpreter::{EnvT, Interpreter, LoxObject, new_interpreter_and_environment};
+use crate::interpreter::{EnvironmentWrapper, Interpreter, LoxObject, new_interpreter_and_environment};
 
 #[macro_use]
 mod define_ast;
@@ -64,7 +64,7 @@ fn run_prompt() -> Result<()> {
 fn run<W: Write>(
     source: &str,
     interpreter: &mut Interpreter<W>,
-    environment: &EnvT,
+    environment: &EnvironmentWrapper,
     is_repl: bool,
 ) -> Result<Option<LoxObject>> {
     #[cfg(feature = "timings")]

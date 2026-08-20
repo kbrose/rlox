@@ -3,7 +3,7 @@ use std::{cell::RefCell, fmt, rc::Rc};
 use crate::{
     ast::{Expr, Stmt},
     interpreter::{
-        EnvT,
+        EnvironmentWrapper,
         callables::LoxCallable,
         environment::Environment,
         lox_object::{LoxFunction, LoxObject},
@@ -57,7 +57,7 @@ pub(crate) struct Interpreter<W: Write> {
     writer: W,
 }
 
-pub(crate) fn new_interpreter_and_environment<W>(writer: W) -> (Interpreter<W>, Rc<RefCell<Environment>>)
+pub(crate) fn new_interpreter_and_environment<W>(writer: W) -> (Interpreter<W>, EnvironmentWrapper)
 where
     W: Write,
 {
@@ -74,7 +74,7 @@ impl<W: Write> Interpreter<W> {
     pub(crate) fn evaluate(
         &mut self,
         expr: &Expr,
-        environment: &EnvT,
+        environment: &EnvironmentWrapper,
     ) -> Result<LoxObject, EvaluationException> {
         match expr {
             Expr::LiteralExpr(literal) => {
@@ -185,26 +185,28 @@ impl<W: Write> Interpreter<W> {
                     .get_callable::<W>()
                     .map_err(|e| RuntimeError::new(&call.open_paren, e))?;
 
-                let num_args = call.arguments.len();
-                let arity = callee.arity();
-
-                if num_args != arity {
-                    return Err(RuntimeError::new(
-                        &call.open_paren,
-                        format!("Expected {arity} arguments, got {num_args}."),
-                    )
-                    .into());
-                }
-
-                let mut arguments: Vec<LoxObject> = Vec::with_capacity(num_args);
+                let mut arguments: Vec<LoxObject> = Vec::with_capacity(call.arguments.len());
                 for argument in call.arguments.iter() {
                     arguments.push(self.evaluate(argument, environment)?)
                 }
 
-                match callee.call(self, arguments) {
-                    // Reinterpret Return exceptions as Ok values.
-                    Err(EvaluationException::Return(return_value)) => Ok(return_value),
-                    catchall => catchall, // Other Ok(x) and RuntimeErrors get passed on
+                match callee.align_arguments(arguments) {
+                    Ok(parsed_arguments) => {
+                        match callee.call(self, parsed_arguments) {
+                            // Reinterpret Return exceptions as Ok values.
+                            Err(EvaluationException::Return(return_value)) => Ok(return_value),
+                            catchall => catchall, // Other Ok(x) and RuntimeErrors get passed on
+                        }
+                    }
+                    Err(argument_length_mismatch) => Err(RuntimeError::new(
+                        &call.open_paren,
+                        format!(
+                            "Expected {} arguments, got {}.",
+                            argument_length_mismatch.expected(),
+                            argument_length_mismatch.provided()
+                        ),
+                    )
+                    .into()),
                 }
             }
         }
@@ -213,7 +215,7 @@ impl<W: Write> Interpreter<W> {
     pub(super) fn execute_stmt(
         &mut self,
         stmt: &Stmt,
-        environment: &EnvT,
+        environment: &EnvironmentWrapper,
     ) -> Result<LoopControlFlow, EvaluationException> {
         match stmt {
             Stmt::StmtExpression(stmt_expression) => {
@@ -301,7 +303,7 @@ impl<W: Write> Interpreter<W> {
         }
     }
 
-    pub(crate) fn interpret(&mut self, stmts: &[Stmt], environment: &EnvT) -> AnyhowResult<()> {
+    pub(crate) fn interpret(&mut self, stmts: &[Stmt], environment: &EnvironmentWrapper) -> AnyhowResult<()> {
         for stmt in stmts {
             self.execute_stmt(stmt, environment).map_err(|e| {
                 match e {
