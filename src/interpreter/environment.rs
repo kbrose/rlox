@@ -64,4 +64,48 @@ impl Environment {
             Err(RuntimeError::new(name, "Unknown variable".to_string()))
         }
     }
+
+    // fn ancestor(&self, distance: usize) -> EnvironmentWrapper {
+    //     if distance == 0 {
+    //         Rc::new(RefCell::new(self))
+    //     }
+    // }
+}
+
+pub(crate) fn get_from_env_at(
+    mut environment: Rc<RefCell<Environment>>,
+    name: &IdentifierToken,
+    distance: usize,
+) -> Result<LoxObject, RuntimeError> {
+    let key = name.identifier();
+
+    for _ in 0..distance {
+        environment = {
+            let borrow = environment.borrow();
+            borrow.child.as_ref().expect("distance does not match actual scope depth?").clone()
+        };
+    }
+
+    match environment.borrow().scope.get(key) {
+        Some(value) => Ok(value.clone()), // TODO: Can we avoid clone?
+        None => Err(RuntimeError::new(name, "Unknown variable".to_string())),
+    }
+}
+
+pub(crate) fn set_from_env_at(
+    mut environment: Rc<RefCell<Environment>>,
+    name: &IdentifierToken,
+    value: LoxObject,
+    distance: usize,
+) {
+    let key = name.identifier();
+
+    for _ in 0..distance {
+        environment = {
+            let borrow = environment.borrow();
+            borrow.child.as_ref().expect("distance does not match actual scope depth?").clone()
+        };
+    }
+
+    environment.borrow_mut().scope.insert(key.to_string(), value);
 }

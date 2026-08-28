@@ -154,7 +154,7 @@ impl<W: Write> LoxCallable<W> for LoxFunction {
         interpreter: &mut Interpreter<W>,
         parsed_args: Vec<(&IdentifierToken, LoxObject)>,
     ) -> Result<LoxObject, crate::interpreter::interpreter::EvaluationException> {
-        let mut env = super::environment::new_scope(&Rc::clone(&self.closure));
+        let env = super::environment::new_scope(&Rc::clone(&self.closure));
 
         // We have verified their lengths match elsewhere.
         // TODO: Any way to use "parse don't validate" here?
@@ -162,9 +162,18 @@ impl<W: Write> LoxCallable<W> for LoxFunction {
             env.borrow_mut().define(param_identifier, param_value);
         }
 
-        let out = interpreter.execute_stmt(&self.declaration.body, &mut env);
-
-        out?;
+        let previous_environment = Rc::clone(&interpreter.environment);
+        interpreter.environment = env;
+        for statement in self.declaration.body.iter() {
+            match interpreter.execute_stmt(statement) {
+                Ok(_) => {}
+                Err(e) => {
+                    interpreter.environment = previous_environment;
+                    return Err(e);
+                }
+            };
+        }
+        interpreter.environment = previous_environment;
 
         Ok(LoxObject::Nil)
     }

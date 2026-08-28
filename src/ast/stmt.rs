@@ -4,7 +4,7 @@ use crate::parser::{ErrorTrackingToken, IdentifierToken};
 define_ast! {
     Stmt {
         StmtExpression {expression: Expr},
-        Function {name: IdentifierToken, params: Vec<IdentifierToken>, body: Stmt},
+        Function {name: IdentifierToken, params: Vec<IdentifierToken>, body: Vec<Stmt>},
         If {condition: Expr, then_branch: Stmt, else_branch: Option<Stmt>},
         Print {expression: Expr},
         Return {token: ErrorTrackingToken, value: Option<Expr>},

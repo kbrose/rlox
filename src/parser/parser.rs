@@ -73,7 +73,6 @@ type SResult = Result<Stmt, ParserError>;
 struct Parser<'a, W: Write> {
     tokens: &'a [Token],
     current: usize,
-    parse_error: bool,
     error_writer: &'a mut W,
     loop_level: u8,
     function_level: u8,
@@ -99,7 +98,6 @@ impl<'a, W: Write> Parser<'a, W> {
         Parser {
             tokens,
             current: 0,
-            parse_error: false,
             error_writer,
             loop_level: 0,
             function_level: 0,
@@ -113,11 +111,7 @@ impl<'a, W: Write> Parser<'a, W> {
         while !self.is_at_end() {
             statements.push(self.declaration()?);
         }
-        if self.parse_error {
-            Err(ParserError {})
-        } else {
-            Ok(statements)
-        }
+        Ok(statements)
     }
 
     fn error(&mut self, line: usize, token_str: String, message: &str) {
@@ -330,8 +324,10 @@ impl<'a, W: Write> Parser<'a, W> {
         self.consume(TokenType::LeftBrace, &format!("Expect '{{' before {kind} body."))?;
 
         let body = self.returnable_statement(Self::block)?;
-
-        Ok(Function::lift(name, params, body))
+        match body {
+            Stmt::Block(block) => Ok(Function::lift(name, params, block.statements)),
+            _ => panic!("Self::block() returned non-block statement?"),
+        }
     }
 
     fn returnable_statement<F>(&mut self, mut f: F) -> SResult
@@ -929,6 +925,11 @@ mod tests {
         assert!(parse(scan_tokens(&"+123;").expect("Error scanning"), std::io::sink()).is_err());
         assert!(parse(scan_tokens(&"class;").expect("Error scanning"), std::io::sink()).is_err());
         assert!(parse(scan_tokens(&"break;").expect("Error scanning"), std::io::sink()).is_err());
+    }
+
+    #[test]
+    fn test_error_productions() {
+        assert!(parse(scan_tokens(&"123+").expect("Error scanning"), std::io::sink()).is_err());
     }
 
     #[test]

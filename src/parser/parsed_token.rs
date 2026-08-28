@@ -4,9 +4,11 @@
 // more type-safe if those expressions/statements can only hold tokens
 // of the correct type.
 
+use std::hash::{Hash, Hasher};
+
 use crate::scanner::{Token, TokenLike, TokenType};
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub(crate) struct IdentifierToken {
     identifier: String,
     line: usize,
@@ -42,12 +44,12 @@ impl TokenLike for IdentifierToken {
 
 // Note that there will be redundancy between UnaryOp and BinaryOp:
 // the `-` character can resolve to either one depending on the syntax.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub(crate) enum UnaryOp {
     Minus,
     Bang,
 }
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub(crate) struct UnaryToken {
     op: UnaryOp,
     line: usize,
@@ -78,7 +80,7 @@ impl TokenLike for UnaryToken {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub(crate) enum BinaryOp {
     Plus,
     Minus,
@@ -92,7 +94,7 @@ pub(crate) enum BinaryOp {
     EqualEqual,
     Comma,
 }
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub(crate) struct BinaryToken {
     op: BinaryOp,
     line: usize,
@@ -132,12 +134,12 @@ impl TokenLike for BinaryToken {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub(crate) enum LogicalOp {
     And,
     Or,
 }
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub(crate) struct LogicalToken {
     op: LogicalOp,
     line: usize,
@@ -168,13 +170,39 @@ impl TokenLike for LogicalToken {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Clone)]
 pub(crate) enum ParsedLiteral {
     Nil,
     True,
     False,
     Number(f64),
     String(String),
+}
+
+impl PartialEq for ParsedLiteral {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Number(a), Self::Number(b)) => (a.is_nan() && b.is_nan()) || (a == b),
+            (Self::String(a), Self::String(b)) => a == b,
+            (Self::Nil, Self::Nil) | (Self::True, Self::True) | (Self::False, Self::False) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ParsedLiteral {}
+
+impl Hash for ParsedLiteral {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Hash the variant discriminant first
+        core::mem::discriminant(self).hash(state);
+
+        match self {
+            Self::Nil | Self::True | Self::False => {}
+            Self::Number(n) => n.to_bits().hash(state),
+            Self::String(s) => s.hash(state),
+        }
+    }
 }
 
 impl ParsedLiteral {
@@ -189,7 +217,7 @@ impl ParsedLiteral {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub(crate) struct ErrorTrackingToken {
     display: String,
     line: usize,

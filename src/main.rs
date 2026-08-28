@@ -6,13 +6,17 @@ use std::{
     io::{self, Stdout, Write},
 };
 
-use crate::interpreter::{EnvironmentWrapper, Interpreter, LoxObject, new_interpreter_and_environment};
+use crate::{
+    interpreter::{Interpreter, LoxObject},
+    resolver::resolve,
+};
 
 #[macro_use]
 mod define_ast;
 mod ast;
 mod interpreter;
 mod parser;
+mod resolver;
 mod scanner;
 
 fn main() -> Result<()> {
@@ -32,9 +36,9 @@ fn run_file(path: &String) -> Result<()> {
         anyhow!("")
     })?;
 
-    let (mut interpreter, environment) = new_interpreter_and_environment(std::io::stdout());
+    let mut interpreter = Interpreter::new(std::io::stdout());
 
-    run(&input, &mut interpreter, &environment, false)?;
+    run(&input, &mut interpreter, false)?;
 
     Ok(())
 }
@@ -43,7 +47,7 @@ fn run_prompt() -> Result<()> {
     let mut buffer = String::new();
     let stdin = io::stdin();
     println!("Welcome to rlox! Press Ctrl-D to exit.");
-    let (mut interpreter, environment) = new_interpreter_and_environment(std::io::stdout());
+    let mut interpreter = Interpreter::new(std::io::stdout());
     loop {
         print!("> ");
         std::io::stdout().flush()?;
@@ -53,7 +57,7 @@ fn run_prompt() -> Result<()> {
             break Ok(());
         }
 
-        match run(&buffer, &mut interpreter, &environment, true) {
+        match run(&buffer, &mut interpreter, true) {
             Ok(Some(value)) => println!("{}", value.to_string::<Stdout>()), // Show evaluated expressions
             _ => {} // Errors should have already been printed.
         }
@@ -61,12 +65,7 @@ fn run_prompt() -> Result<()> {
     }
 }
 
-fn run<W: Write>(
-    source: &str,
-    interpreter: &mut Interpreter<W>,
-    environment: &EnvironmentWrapper,
-    is_repl: bool,
-) -> Result<Option<LoxObject>> {
+fn run<W: Write>(source: &str, interpreter: &mut Interpreter<W>, is_repl: bool) -> Result<Option<LoxObject>> {
     #[cfg(feature = "timings")]
     let timer = Instant::now();
 
@@ -89,7 +88,10 @@ fn run<W: Write>(
 
         match parse {
             parser::ReplParseOutput::Statements(statements) => {
-                interpreter.interpret(&statements, &environment)?;
+                resolve(&statements, &mut std::io::stderr(), interpreter)
+                    .map_err(|_| anyhow!("Error resolving assignments."))?;
+
+                interpreter.interpret(&statements)?;
 
                 #[cfg(feature = "timings")]
                 println!("Parsing: {:?}", timer.elapsed());
@@ -97,7 +99,9 @@ fn run<W: Write>(
                 Ok(None)
             }
             parser::ReplParseOutput::Expr(expr) => {
-                let evaluated = interpreter.evaluate(&expr, &environment);
+                // No resolving needs to happen ... ?
+
+                let evaluated = interpreter.evaluate(&expr);
 
                 #[cfg(feature = "timings")]
                 println!("Parsing: {:?}", timer.elapsed());
@@ -111,13 +115,16 @@ fn run<W: Write>(
     } else {
         let statements = parser::parse(tokens, std::io::stderr())?;
 
+        resolve(&statements, &mut std::io::stderr(), interpreter)
+            .map_err(|_| anyhow!("Error resolving assignments."))?;
+
         #[cfg(feature = "timings")]
         let timer = {
             println!("Parsing: {:?}", timer.elapsed());
             Instant::now()
         };
 
-        interpreter.interpret(&statements, environment)?;
+        interpreter.interpret(&statements)?;
 
         #[cfg(feature = "timings")]
         println!("Parsing: {:?}", timer.elapsed());
