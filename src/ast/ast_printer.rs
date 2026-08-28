@@ -39,6 +39,18 @@ pub(crate) fn pretty_print_expr(expr: &Expr) -> String {
                 call.arguments.iter().map(pretty_print_expr).collect::<Vec<_>>().join(", ")
             )
         }
+        Expr::Get(get) => {
+            format!("{}.{}", pretty_print_expr(&get.object), get.name.pretty_print())
+        }
+        Expr::Set(set) => {
+            format!(
+                "{}.{} = {}",
+                pretty_print_expr(&set.object),
+                set.name.pretty_print(),
+                pretty_print_expr(&set.value)
+            )
+        }
+        Expr::This(this) => this.keyword.pretty_print(),
     }
 }
 

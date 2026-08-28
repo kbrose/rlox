@@ -7,10 +7,18 @@ use crate::{
     scanner::TokenLike,
 };
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum FunctionType {
     None,
     Function,
+    Initializer,
+    Method,
+}
+
+#[derive(Clone, Copy)]
+enum ClassType {
+    None,
+    Class,
 }
 
 pub(crate) struct Resolver<'a, 'b, W1: Write, W2: Write> {
@@ -19,6 +27,7 @@ pub(crate) struct Resolver<'a, 'b, W1: Write, W2: Write> {
     error_writer: &'a mut W1,
     interpreter: &'b mut Interpreter<W2>,
     current_function: FunctionType,
+    current_class: ClassType,
 }
 
 impl<'a, 'b, W1: Write, W2: Write> Resolver<'a, 'b, W1, W2> {
@@ -29,6 +38,7 @@ impl<'a, 'b, W1: Write, W2: Write> Resolver<'a, 'b, W1, W2> {
             error_writer,
             interpreter,
             current_function: FunctionType::None,
+            current_class: ClassType::None,
         }
     }
 
@@ -126,6 +136,17 @@ impl<'a, 'b, W1: Write, W2: Write> Resolver<'a, 'b, W1, W2> {
 
                 self.resolve_local(expr, key);
             }
+            Expr::Get(get) => {
+                self.resolve_expression(&get.object);
+            }
+            Expr::Set(set) => {
+                self.resolve_expression(&set.object);
+                self.resolve_expression(&set.value);
+            }
+            Expr::This(this) => match self.current_class {
+                ClassType::None => self.error(&this.keyword, "Can't use 'this' outside of a class."),
+                ClassType::Class => self.resolve_local(expr, "this"),
+            },
         }
     }
 
@@ -153,9 +174,14 @@ impl<'a, 'b, W1: Write, W2: Write> Resolver<'a, 'b, W1, W2> {
             Stmt::Return(return_stmt) => {
                 match self.current_function {
                     FunctionType::None => self.error(&return_stmt.token, "Can't return from top-level code."),
+                    FunctionType::Initializer => {} // this may or may not be a problem depending on whether they returned a value.
                     FunctionType::Function => {}
+                    FunctionType::Method => {}
                 }
                 if let Some(return_stmt_stmt) = &return_stmt.value {
+                    if self.current_function == FunctionType::Initializer {
+                        self.error(&return_stmt.token, "Can't return from initializer.")
+                    }
                     self.resolve_expression(return_stmt_stmt);
                 }
             }
@@ -178,6 +204,31 @@ impl<'a, 'b, W1: Write, W2: Write> Resolver<'a, 'b, W1, W2> {
                 self.end_scope();
             }
             Stmt::Break(_) => {}
+            Stmt::Class(class) => {
+                let old_class_type = self.current_class;
+                self.current_class = ClassType::Class;
+
+                self.declare(&class.name);
+                self.define(&class.name);
+
+                self.begin_scope();
+                self.scopes
+                    .last_mut()
+                    .expect("scopes is empty immediately after begin_scope()?")
+                    .insert("this".to_string(), true);
+
+                for method in class.methods.iter() {
+                    if method.name.identifier() == "init" {
+                        self.resolve_function(method, FunctionType::Initializer);
+                    } else {
+                        self.resolve_function(method, FunctionType::Method);
+                    }
+                }
+
+                self.end_scope();
+
+                self.current_class = old_class_type;
+            }
         }
     }
 }
@@ -227,6 +278,11 @@ mod tests {
     #[test]
     fn test_double_declare_at_non_global_scope() {
         assert!(!resolves_from_str("fun bad() {var a = 1; var a = 2;}"))
+    }
+
+    #[test]
+    fn test_return_from_init() {
+        assert!(!resolves_from_str("class Foo {init() {return 5;}}"))
     }
 
     // This test is not valid, I actually added support for catching this during

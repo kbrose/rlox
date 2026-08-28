@@ -1,13 +1,9 @@
-fun makeCounter() {
-  var i = 0;
-  fun count() {
-    i = i + 1;
-    print i;
-  }
-
-  return count;
+class Foo {
+    init() {
+        if (true) {this.x = 5; return;}
+        print "In init";
+    }
 }
 
-var counter = makeCounter();
-counter(); // "1".
-counter(); // "2".
+var foo = Foo();
+print foo.x;

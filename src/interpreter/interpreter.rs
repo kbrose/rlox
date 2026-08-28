@@ -6,7 +6,7 @@ use crate::{
         EnvironmentWrapper,
         callables::LoxCallable,
         environment::{Environment, get_from_env_at, set_from_env_at},
-        lox_object::{LoxFunction, LoxObject},
+        lox_object::{LoxClass, LoxFunction, LoxObject, get_from_instance, set_from_instance},
     },
     parser::IdentifierToken,
     scanner::TokenLike,
@@ -21,7 +21,7 @@ pub(super) enum LoopControlFlow {
 
 #[derive(Debug)]
 pub(crate) enum EvaluationException {
-    Return(LoxObject),
+    Return(Rc<LoxObject>),
     RuntimeError(RuntimeError),
 }
 
@@ -81,7 +81,7 @@ impl<W: Write> Interpreter<W> {
         &self,
         name: &IdentifierToken,
         expr: &Expr,
-    ) -> Result<LoxObject, EvaluationException> {
+    ) -> Result<Rc<LoxObject>, EvaluationException> {
         if let Some(distance) = self.locals.get(expr) {
             get_from_env_at(Rc::clone(&self.environment), name, *distance).map_err(|e| e.into())
         } else {
@@ -89,7 +89,7 @@ impl<W: Write> Interpreter<W> {
         }
     }
 
-    pub(crate) fn evaluate(&mut self, expr: &Expr) -> Result<LoxObject, EvaluationException> {
+    pub(crate) fn evaluate(&mut self, expr: &Expr) -> Result<Rc<LoxObject>, EvaluationException> {
         match expr {
             Expr::LiteralExpr(literal) => {
                 let out = match &literal.value {
@@ -99,7 +99,7 @@ impl<W: Write> Interpreter<W> {
                     crate::parser::ParsedLiteral::String(s) => LoxObject::String(s.clone()),
                     crate::parser::ParsedLiteral::Number(x) => LoxObject::Number(*x),
                 };
-                Ok(out)
+                Ok(Rc::new(out))
             }
             Expr::Grouping(grouping) => self.evaluate(&grouping.expression),
             Expr::Unary(unary) => {
@@ -112,7 +112,7 @@ impl<W: Write> Interpreter<W> {
                     ),
                 };
 
-                Ok(out)
+                Ok(Rc::new(out))
             }
             Expr::Binary(binary) => {
                 let left = self.evaluate(&binary.left)?;
@@ -123,17 +123,17 @@ impl<W: Write> Interpreter<W> {
                 };
 
                 match binary.operator.op() {
-                    crate::parser::BinaryOp::Minus => Ok(LoxObject::Number(
+                    crate::parser::BinaryOp::Minus => Ok(Rc::new(LoxObject::Number(
                         left.get_number().map_err(err)? - right.get_number().map_err(err)?,
-                    )),
+                    ))),
                     crate::parser::BinaryOp::Plus => {
                         if let (Ok(l), Ok(r)) = (left.get_number(), right.get_number()) {
-                            Ok(LoxObject::Number(l + r))
+                            Ok(Rc::new(LoxObject::Number(l + r)))
                         } else if let (Ok(l), Ok(r)) = (left.get_string(), right.get_string()) {
                             let mut s = String::with_capacity(l.len() + r.len());
                             s.push_str(l);
                             s.push_str(r);
-                            Ok(LoxObject::String(s))
+                            Ok(Rc::new(LoxObject::String(s)))
                         } else {
                             Err(err(String::from("Type error: + with incompatible types")))
                         }
@@ -143,26 +143,30 @@ impl<W: Write> Interpreter<W> {
                         if right == 0.0 {
                             Err(err(String::from("Division by zero")))
                         } else {
-                            Ok(LoxObject::Number(left.get_number().map_err(err)? / right))
+                            Ok(Rc::new(LoxObject::Number(left.get_number().map_err(err)? / right)))
                         }
                     }
-                    crate::parser::BinaryOp::Star => Ok(LoxObject::Number(
+                    crate::parser::BinaryOp::Star => Ok(Rc::new(LoxObject::Number(
                         left.get_number().map_err(err)? * right.get_number().map_err(err)?,
-                    )),
-                    crate::parser::BinaryOp::Greater => Ok(LoxObject::Boolean(
+                    ))),
+                    crate::parser::BinaryOp::Greater => Ok(Rc::new(LoxObject::Boolean(
                         left.get_number().map_err(err)? > right.get_number().map_err(err)?,
-                    )),
-                    crate::parser::BinaryOp::GreaterEqual => Ok(LoxObject::Boolean(
+                    ))),
+                    crate::parser::BinaryOp::GreaterEqual => Ok(Rc::new(LoxObject::Boolean(
                         left.get_number().map_err(err)? >= right.get_number().map_err(err)?,
-                    )),
-                    crate::parser::BinaryOp::Less => Ok(LoxObject::Boolean(
+                    ))),
+                    crate::parser::BinaryOp::Less => Ok(Rc::new(LoxObject::Boolean(
                         left.get_number().map_err(err)? < right.get_number().map_err(err)?,
-                    )),
-                    crate::parser::BinaryOp::LessEqual => Ok(LoxObject::Boolean(
+                    ))),
+                    crate::parser::BinaryOp::LessEqual => Ok(Rc::new(LoxObject::Boolean(
                         left.get_number().map_err(err)? <= right.get_number().map_err(err)?,
-                    )),
-                    crate::parser::BinaryOp::BangEqual => Ok(LoxObject::Boolean(!left.is_equal(&right))),
-                    crate::parser::BinaryOp::EqualEqual => Ok(LoxObject::Boolean(left.is_equal(&right))),
+                    ))),
+                    crate::parser::BinaryOp::BangEqual => {
+                        Ok(Rc::new(LoxObject::Boolean(!left.is_equal(&right))))
+                    }
+                    crate::parser::BinaryOp::EqualEqual => {
+                        Ok(Rc::new(LoxObject::Boolean(left.is_equal(&right))))
+                    }
                     _ => panic!("Unexpected token type for binary!"), // TODO: Don't panic, make unrepresentable
                 }
             }
@@ -179,7 +183,7 @@ impl<W: Write> Interpreter<W> {
                     Ok(value)
                 } else {
                     // TODO: Any way to avoid the clone here?
-                    match self.globals.borrow_mut().assign(&assign.name, value.clone()) {
+                    match self.globals.borrow_mut().assign(&assign.name, &value) {
                         Ok(()) => Ok(value),
                         Err(()) => {
                             Err(RuntimeError::new(&assign.name, "Undefined variable".to_string()).into())
@@ -211,7 +215,7 @@ impl<W: Write> Interpreter<W> {
                     .get_callable::<W>()
                     .map_err(|e| RuntimeError::new(&call.open_paren, e))?;
 
-                let mut arguments: Vec<LoxObject> = Vec::with_capacity(call.arguments.len());
+                let mut arguments: Vec<Rc<LoxObject>> = Vec::with_capacity(call.arguments.len());
                 for argument in call.arguments.iter() {
                     arguments.push(self.evaluate(argument)?)
                 }
@@ -235,10 +239,34 @@ impl<W: Write> Interpreter<W> {
                     .into()),
                 }
             }
+            Expr::Get(get) => {
+                let object = self.evaluate(&get.object)?;
+                match object.as_ref() {
+                    LoxObject::LoxInstance(lox_instance) => Ok(get_from_instance(lox_instance, &get.name)?),
+                    _ => {
+                        Err(RuntimeError::new(&get.name, "Only instances have properties.".to_string())
+                            .into())
+                    }
+                }
+            }
+            Expr::Set(set) => {
+                let object = self.evaluate(&set.object)?;
+                match object.as_ref() {
+                    LoxObject::LoxInstance(lox_instance) => {
+                        let value = self.evaluate(&set.value)?;
+
+                        set_from_instance(lox_instance, &set.name, &value);
+
+                        Ok(value)
+                    }
+                    _ => Err(RuntimeError::new(&set.name, "Only instances have fields.".to_string()).into()),
+                }
+            }
+            Expr::This(this) => self.look_up_variable(&this.keyword, expr),
         }
     }
 
-    pub(super) fn execute_stmt(&mut self, stmt: &Stmt) -> Result<LoopControlFlow, EvaluationException> {
+    pub(super) fn execute_stmt(&mut self, stmt: Stmt) -> Result<LoopControlFlow, EvaluationException> {
         match stmt {
             Stmt::StmtExpression(stmt_expression) => {
                 self.evaluate(&stmt_expression.expression)?;
@@ -261,10 +289,10 @@ impl<W: Write> Interpreter<W> {
                 let value = if let Some(initializer) = &var.initializer {
                     self.evaluate(&initializer)
                 } else {
-                    Ok(LoxObject::Nil)
+                    Ok(Rc::new(LoxObject::Nil))
                 }?;
 
-                self.environment.borrow_mut().define(&var.name, value);
+                self.environment.borrow_mut().define(&var.name, &value);
 
                 Ok(LoopControlFlow::Normal)
             }
@@ -277,8 +305,8 @@ impl<W: Write> Interpreter<W> {
             }
             Stmt::If(if_stmt) => {
                 if self.evaluate(&if_stmt.condition)?.truthiness() {
-                    self.execute_stmt(&if_stmt.then_branch)
-                } else if let Some(else_stmt) = &if_stmt.else_branch {
+                    self.execute_stmt(if_stmt.then_branch)
+                } else if let Some(else_stmt) = if_stmt.else_branch {
                     self.execute_stmt(else_stmt)
                 } else {
                     Ok(LoopControlFlow::Normal)
@@ -286,7 +314,8 @@ impl<W: Write> Interpreter<W> {
             }
             Stmt::While(while_stmt) => {
                 while self.evaluate(&while_stmt.condition)?.truthiness() {
-                    match self.execute_stmt(&while_stmt.body)? {
+                    // TODO: Avoid clone somehow?
+                    match self.execute_stmt(while_stmt.body.clone())? {
                         LoopControlFlow::Normal => {}
                         LoopControlFlow::Break => {
                             break;
@@ -299,25 +328,48 @@ impl<W: Write> Interpreter<W> {
             Stmt::Function(function) => {
                 let closure = crate::interpreter::environment::new_scope(&Rc::clone(&self.environment));
                 let defined_function =
-                    LoxObject::LoxFunction(LoxFunction::new((**function).clone(), closure));
-                self.environment.borrow_mut().define(&function.name, defined_function);
+                    Rc::new(LoxObject::LoxFunction(LoxFunction::new((*function).clone(), closure, false)));
+                self.environment.borrow_mut().define(&function.name, &defined_function);
                 Ok(LoopControlFlow::Normal)
             }
             Stmt::Return(return_stmt) => {
                 let out = match &return_stmt.value {
                     Some(expr) => self.evaluate(&expr)?,
-                    None => LoxObject::Nil,
+                    None => Rc::new(LoxObject::Nil),
                 };
                 Err(EvaluationException::Return(out))
+            }
+            Stmt::Class(class) => {
+                self.environment.borrow_mut().define(&class.name, &Rc::new(LoxObject::Nil));
+
+                let mut methods = HashMap::new();
+                for method in class.methods.iter() {
+                    let function = LoxFunction::new(
+                        method.clone(),
+                        (&self.environment).clone(),
+                        method.name.identifier() == "init",
+                    );
+                    methods.insert(method.name.identifier().to_string(), function);
+                }
+
+                let lox_class = Rc::new(LoxObject::LoxClass(Rc::new(LoxClass::new(
+                    class.name.identifier().to_string(),
+                    methods,
+                ))));
+                self.environment
+                    .borrow_mut()
+                    .assign(&class.name, &lox_class)
+                    .expect("Assignment should always succeed, it is preceded by define()");
+                Ok(LoopControlFlow::Normal)
             }
         }
     }
 
     fn execute_block(
         &mut self,
-        block: &Box<crate::ast::Block>,
+        block: Box<crate::ast::Block>,
     ) -> Result<LoopControlFlow, EvaluationException> {
-        for statement in block.statements.iter() {
+        for statement in block.statements.into_iter() {
             match self.execute_stmt(statement) {
                 Ok(control_flow) => {
                     match control_flow {
@@ -335,7 +387,7 @@ impl<W: Write> Interpreter<W> {
         Ok(LoopControlFlow::Normal)
     }
 
-    pub(crate) fn interpret(&mut self, stmts: &[Stmt]) -> AnyhowResult<()> {
+    pub(crate) fn interpret(&mut self, stmts: Vec<Stmt>) -> AnyhowResult<()> {
         for stmt in stmts {
             self.execute_stmt(stmt).map_err(|e| {
                 match e {
@@ -375,7 +427,9 @@ mod tests {
 
         assert!(parsed.len() == 1);
         match parsed.first().unwrap() {
-            Stmt::StmtExpression(stmt_expression) => interpreter.evaluate(&stmt_expression.expression),
+            Stmt::StmtExpression(stmt_expression) => {
+                interpreter.evaluate(&stmt_expression.expression).map(|v| (*v).clone())
+            }
             _ => {
                 panic!("Expected statement expression")
             }
@@ -390,12 +444,14 @@ mod tests {
 
         resolve(&parsed, &mut std::io::sink(), &mut interpreter).expect("Error resolving.");
 
-        interpreter.interpret(&parsed).expect("interpreting error");
+        interpreter.interpret(parsed).expect("interpreting error");
 
         let parsed = parse(scan_tokens(expr).expect("scan error"), std::io::stderr()).expect("parse error");
         assert!(parsed.len() == 1);
         match parsed.first().unwrap() {
-            Stmt::StmtExpression(stmt_expression) => interpreter.evaluate(&stmt_expression.expression),
+            Stmt::StmtExpression(stmt_expression) => {
+                interpreter.evaluate(&stmt_expression.expression).map(|v| (*v).clone())
+            }
             _ => {
                 panic!("Expected statement expression")
             }
@@ -411,7 +467,7 @@ mod tests {
 
         resolve(&parsed, &mut std::io::sink(), &mut interpreter).expect("Error resolving.");
 
-        interpreter.interpret(&parsed).expect("interpreting error");
+        interpreter.interpret(parsed).expect("interpreting error");
 
         String::from_utf8(interpreter.writer).expect("Error with UTF8 encoding")
     }
@@ -689,5 +745,161 @@ mod tests {
                 "#
             )
         )
+    }
+
+    #[test]
+    fn test_print_class() {
+        assert_eq!(
+            String::from("DevonshireCream\n"),
+            execute_stmts(
+                r#"
+                class DevonshireCream {
+                    serveOn() {
+                    return "Scones";
+                    }
+                }
+
+                print DevonshireCream;
+                "#
+            )
+        );
+    }
+
+    #[test]
+    fn test_print_instance() {
+        assert_eq!(
+            String::from("DevonshireCream instance\n"),
+            execute_stmts(
+                r#"
+                class DevonshireCream {
+                    serveOn() {
+                    return "Scones";
+                    }
+                }
+
+                print DevonshireCream();
+                "#
+            )
+        );
+    }
+
+    #[test]
+    fn test_class_set_and_get() {
+        assert_eq!(
+            String::from("cream cheese\n"),
+            execute_stmts(
+                r#"
+                class Bagel {}
+                var bagel = Bagel();
+                bagel.topping = "cream cheese";
+                print bagel.topping;
+                "#
+            )
+        );
+    }
+
+    #[test]
+    fn test_class_method() {
+        assert_eq!(
+            String::from("Crunch crunch crunch!\n"),
+            execute_stmts(
+                r#"
+                class Bacon {
+                  eat() {
+                    print "Crunch crunch crunch!";
+                  }
+                }
+
+                Bacon().eat();
+                "#
+            )
+        );
+    }
+
+    #[test]
+    fn test_this() {
+        assert_eq!(
+            String::from("The German chocolate cake is delicious!\n"),
+            execute_stmts(
+                r#"
+                class Cake {
+                  taste() {
+                    var adjective = "delicious";
+                    print "The " + this.flavor + " cake is " + adjective + "!";
+                  }
+                }
+
+                var cake = Cake();
+                cake.flavor = "German chocolate";
+                cake.taste();
+                "#
+            )
+        );
+    }
+
+    #[test]
+    fn test_constructor() {
+        assert_eq!(
+            String::from("pastrami on rye please!\n"),
+            execute_stmts(
+                r#"
+                class Sandwich {
+                  init(bread, fillings) {
+                    this.bread = bread;
+                    this.fillings = fillings;
+                  }
+
+                  order() {
+                    print this.fillings + " on " + this.bread + " please!";
+                  }
+                }
+
+                var sandwich = Sandwich("rye", "pastrami");
+                sandwich.order();
+                "#
+            )
+        );
+    }
+
+    #[test]
+    fn test_init_directly() {
+        assert_eq!(
+            // It should be printed 3 times, init is called twice and then the final print
+            // prints the return value of init.
+            String::from("Foo instance\nFoo instance\nFoo instance\n"),
+            execute_stmts(
+                r#"
+                class Foo {
+                  init() {
+                    print this;
+                  }
+                }
+
+                var foo = Foo();
+                print foo.init();
+                "#
+            )
+        );
+    }
+
+    #[test]
+    fn test_early_return_in_init() {
+        assert_eq!(
+            // Note that "In init" is NOT printed
+            String::from("5\n"),
+            execute_stmts(
+                r#"
+                class Foo {
+                    init() {
+                        if (true) {this.x = 5; return;}
+                        print "In init";
+                    }
+                }
+
+                var foo = Foo();
+                print foo.x;
+                "#
+            )
+        );
     }
 }

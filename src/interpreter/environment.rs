@@ -10,7 +10,7 @@ pub(crate) type EnvironmentWrapper = Rc<RefCell<Environment>>;
 
 #[derive(Clone, Debug)]
 pub(crate) struct Environment {
-    scope: HashMap<String, LoxObject>,
+    scope: HashMap<String, Rc<LoxObject>>,
     child: Option<EnvironmentWrapper>,
 }
 
@@ -29,23 +29,23 @@ impl Environment {
         };
         env.define(
             &IdentifierToken::new("clock".to_string(), 0),
-            LoxObject::NativeFunction(NativeFunction::Clock),
+            &Rc::new(LoxObject::NativeFunction(NativeFunction::Clock)),
         );
         env
     }
 
-    pub(crate) fn define(&mut self, name: &IdentifierToken, value: LoxObject) {
-        self.scope.insert(name.identifier().to_string(), value);
+    pub(crate) fn define(&mut self, name: &IdentifierToken, value: &Rc<LoxObject>) {
+        self.scope.insert(name.identifier().to_string(), value.clone());
     }
 
-    pub(crate) fn assign(&mut self, name: &IdentifierToken, value: LoxObject) -> Result<(), ()> {
+    pub(crate) fn assign(&mut self, name: &IdentifierToken, value: &Rc<LoxObject>) -> Result<(), ()> {
         let key = name.identifier().to_string();
         self.assign_key_value(key, value)
     }
 
-    fn assign_key_value(&mut self, key: String, value: LoxObject) -> Result<(), ()> {
+    fn assign_key_value(&mut self, key: String, value: &Rc<LoxObject>) -> Result<(), ()> {
         if self.scope.contains_key(&key) {
-            self.scope.insert(key, value);
+            self.scope.insert(key, value.clone());
             Ok(())
         } else if let Some(child) = &mut self.child {
             child.borrow_mut().assign_key_value(key, value)
@@ -54,29 +54,23 @@ impl Environment {
         }
     }
 
-    pub(crate) fn get(&self, name: &IdentifierToken) -> Result<LoxObject, RuntimeError> {
+    pub(crate) fn get(&self, name: &IdentifierToken) -> Result<Rc<LoxObject>, RuntimeError> {
         let key = name.identifier();
         if let Some(value) = self.scope.get(key) {
-            return Ok(value.clone()); // TODO: Can we avoid clone?
+            return Ok(value.clone());
         } else if let Some(child) = &self.child {
             child.borrow().get(name)
         } else {
             Err(RuntimeError::new(name, "Unknown variable".to_string()))
         }
     }
-
-    // fn ancestor(&self, distance: usize) -> EnvironmentWrapper {
-    //     if distance == 0 {
-    //         Rc::new(RefCell::new(self))
-    //     }
-    // }
 }
 
 pub(crate) fn get_from_env_at(
     mut environment: Rc<RefCell<Environment>>,
     name: &IdentifierToken,
     distance: usize,
-) -> Result<LoxObject, RuntimeError> {
+) -> Result<Rc<LoxObject>, RuntimeError> {
     let key = name.identifier();
 
     for _ in 0..distance {
@@ -87,7 +81,7 @@ pub(crate) fn get_from_env_at(
     }
 
     match environment.borrow().scope.get(key) {
-        Some(value) => Ok(value.clone()), // TODO: Can we avoid clone?
+        Some(value) => Ok(value.clone()),
         None => Err(RuntimeError::new(name, "Unknown variable".to_string())),
     }
 }
@@ -95,7 +89,7 @@ pub(crate) fn get_from_env_at(
 pub(crate) fn set_from_env_at(
     mut environment: Rc<RefCell<Environment>>,
     name: &IdentifierToken,
-    value: LoxObject,
+    value: Rc<LoxObject>,
     distance: usize,
 ) {
     let key = name.identifier();
@@ -107,5 +101,5 @@ pub(crate) fn set_from_env_at(
         };
     }
 
-    environment.borrow_mut().scope.insert(key.to_string(), value);
+    environment.borrow_mut().scope.insert(key.to_string(), value.clone());
 }

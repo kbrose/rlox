@@ -4,6 +4,7 @@ use std::time::Instant;
 use std::{
     env,
     io::{self, Stdout, Write},
+    rc::Rc,
 };
 
 use crate::{
@@ -65,7 +66,11 @@ fn run_prompt() -> Result<()> {
     }
 }
 
-fn run<W: Write>(source: &str, interpreter: &mut Interpreter<W>, is_repl: bool) -> Result<Option<LoxObject>> {
+fn run<W: Write>(
+    source: &str,
+    interpreter: &mut Interpreter<W>,
+    is_repl: bool,
+) -> Result<Option<Rc<LoxObject>>> {
     #[cfg(feature = "timings")]
     let timer = Instant::now();
 
@@ -91,7 +96,7 @@ fn run<W: Write>(source: &str, interpreter: &mut Interpreter<W>, is_repl: bool) 
                 resolve(&statements, &mut std::io::stderr(), interpreter)
                     .map_err(|_| anyhow!("Error resolving assignments."))?;
 
-                interpreter.interpret(&statements)?;
+                interpreter.interpret(statements)?;
 
                 #[cfg(feature = "timings")]
                 println!("Parsing: {:?}", timer.elapsed());
@@ -124,7 +129,7 @@ fn run<W: Write>(source: &str, interpreter: &mut Interpreter<W>, is_repl: bool) 
             Instant::now()
         };
 
-        interpreter.interpret(&statements)?;
+        interpreter.interpret(statements)?;
 
         #[cfg(feature = "timings")]
         println!("Parsing: {:?}", timer.elapsed());

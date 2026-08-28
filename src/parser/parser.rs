@@ -2,8 +2,8 @@ use std::io::Write;
 
 use crate::{
     ast::{
-        Assign, Binary, Block, Break, Call, Expr, Function, Grouping, If, LiteralExpr, Logical, Print,
-        Return, Stmt, StmtExpression, Unary, Var, Variable, While,
+        Assign, Binary, Block, Break, Call, Class, Expr, Function, Get, Grouping, If, LiteralExpr, Logical,
+        Print, Return, Set, Stmt, StmtExpression, This, Unary, Var, Variable, While,
     },
     parser::{
         ErrorTrackingToken,
@@ -25,9 +25,11 @@ type SResult = Result<Stmt, ParserError>;
 //                        Statements
 //
 // program        → declaration* EOF ;
-// declaration    → funDecl
+// declaration    → classDecl
+//                | funDecl
 //                | varDecl
 //                | statement ;
+// classDecl      → "class" IDENTIFIER "{" function* "}" ;
 // funDecl        → "fun" function ;
 // function       → IDENTIFIER "(" parameters? ")" block ;
 // parameters     → IDENTIFIER ( "," IDENTIFIER )* ;
@@ -55,7 +57,7 @@ type SResult = Result<Stmt, ParserError>;
 //                        Expressions
 //
 // expression     → assignment ;
-// assignment     → IDENTIFIER "=" assignment
+// assignment     → ( call "." )? IDENTIFIER "=" assignment
 //                | logic_or ;
 // logic_or       → logic_and ( "or" logic_and )* ;
 // logic_and      → comma ( "and" comma )* ;
@@ -65,7 +67,7 @@ type SResult = Result<Stmt, ParserError>;
 // term           → factor ( ( "-" | "+" ) factor )* ;
 // factor         → unary ( ( "/" | "*" ) unary )* ;
 // unary          → ( "!" | "-" ) unary | call ;
-// call           → primary ( "(" arguments? ")" )* ;
+// call           → primary ( "(" arguments? ")" | "." IDENTIFIER )* ;
 // arguments      → expression ( "," expression )* ;
 // primary        → NUMBER | STRING | "true" | "false" | "nil"
 //                | "(" expression ")" ;
@@ -274,7 +276,9 @@ impl<'a, W: Write> Parser<'a, W> {
     // Statements
 
     fn declaration(&mut self) -> SResult {
-        let out = if self.matches_token(&[TokenType::Fun]) {
+        let out = if self.matches_token(&[TokenType::Class]) {
+            self.class_declaration()
+        } else if self.matches_token(&[TokenType::Fun]) {
             self.function("function")
         } else if self.matches_token(&[TokenType::Var]) {
             self.var_declaration()
@@ -289,6 +293,30 @@ impl<'a, W: Write> Parser<'a, W> {
                 Err(e)
             }
         }
+    }
+
+    fn class_declaration(&mut self) -> SResult {
+        let name = IdentifierToken::new_from_token(
+            self.consume(TokenType::Identifier(String::new()), &format!("Expect class name."))?
+                .expect("Missing token after consuming it?"),
+        );
+
+        self.consume(TokenType::LeftBrace, "Expect '{' before class body.")?;
+
+        let mut methods = vec![];
+        while !self.check(&TokenType::RightBrace) && !self.is_at_end() {
+            let function = match self.function("method")? {
+                // TODO: There's gotta be a better way, right?
+                Stmt::Function(function) => function,
+                _ => {
+                    panic!("self.function() returned non-function statement?");
+                }
+            };
+            methods.push(*function);
+        }
+
+        self.consume(TokenType::RightBrace, "Expect '}' after class body.")?;
+        Ok(Class::lift(name, methods))
     }
 
     fn function(&mut self, kind: &str) -> SResult {
@@ -325,6 +353,7 @@ impl<'a, W: Write> Parser<'a, W> {
 
         let body = self.returnable_statement(Self::block)?;
         match body {
+            // TODO: There's gotta be a better way, right?
             Stmt::Block(block) => Ok(Function::lift(name, params, block.statements)),
             _ => panic!("Self::block() returned non-block statement?"),
         }
@@ -592,6 +621,9 @@ impl<'a, W: Write> Parser<'a, W> {
                     let name = variable.name;
                     return Ok(Assign::lift(name, value));
                 }
+                Expr::Get(get) => {
+                    return Ok(Set::lift(get.object, get.name, value));
+                }
                 _ => {
                     self.error(line, token_str, "Invalid assignment target.");
                 }
@@ -680,6 +712,11 @@ impl<'a, W: Write> Parser<'a, W> {
             if self.matches_token(&[TokenType::LeftParen]) {
                 let open_paren_line = self.previous().expect("No previous after matching").line;
                 expr = self.finish_call(expr, open_paren_line)?;
+            } else if self.matches_token(&[TokenType::Dot]) {
+                let name = self
+                    .consume_identifier("Expect property name after '.'.")?
+                    .expect("Empty previous even after advancing?");
+                expr = Get::lift(expr, name);
             } else {
                 break;
             }
@@ -731,6 +768,9 @@ impl<'a, W: Write> Parser<'a, W> {
             Ok(LiteralExpr::lift(ParsedLiteral::True))
         } else if self.matches_token(&[TokenType::Nil]) {
             Ok(LiteralExpr::lift(ParsedLiteral::Nil))
+        } else if self.matches_token(&[TokenType::This]) {
+            let token = self.previous().expect("Empty previous even after advancing?");
+            Ok(This::lift(IdentifierToken::new("this".to_string(), token.line)))
         } else if self.matches_token(&[TokenType::Number(0.0), TokenType::String(String::new())]) {
             // Note the 0.0 and String::new() values don't matter.
             // See implementation of matches_token for more.

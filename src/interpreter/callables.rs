@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::{io::Write, rc::Rc};
 
 use crate::{
     interpreter::{EvaluationException, Interpreter, lox_object::LoxObject},
@@ -33,13 +33,13 @@ pub(crate) trait LoxCallable<W: Write> {
     fn call(
         self: &Self,
         interpreter: &mut Interpreter<W>,
-        parsed_args: Vec<(&IdentifierToken, LoxObject)>,
-    ) -> Result<LoxObject, EvaluationException>;
+        parsed_args: Vec<(&IdentifierToken, Rc<LoxObject>)>,
+    ) -> Result<Rc<LoxObject>, EvaluationException>;
 
     fn align_arguments(
         self: &Self,
-        arguments: Vec<LoxObject>,
-    ) -> Result<Vec<(&IdentifierToken, LoxObject)>, ArgLengthMismatch>;
+        arguments: Vec<Rc<LoxObject>>,
+    ) -> Result<Vec<(&IdentifierToken, Rc<LoxObject>)>, ArgLengthMismatch>;
 
     fn to_string(self: &Self) -> String;
 }
