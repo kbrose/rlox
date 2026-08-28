@@ -7,20 +7,18 @@ use crate::{
     scanner::TokenLike,
 };
 
-// struct Parser<'a, W: Write> {
-//     tokens: &'a [Token],
-//     current: usize,
-//     parse_error: bool,
-//     error_writer: &'a mut W,
-//     loop_level: u8,
-//     function_level: u8,
-// }
+#[derive(Clone, Copy)]
+enum FunctionType {
+    None,
+    Function,
+}
 
 pub(crate) struct Resolver<'a, 'b, W1: Write, W2: Write> {
     scopes: Vec<HashMap<String, bool>>,
     had_error: bool,
     error_writer: &'a mut W1,
     interpreter: &'b mut Interpreter<W2>,
+    current_function: FunctionType,
 }
 
 impl<'a, 'b, W1: Write, W2: Write> Resolver<'a, 'b, W1, W2> {
@@ -30,6 +28,7 @@ impl<'a, 'b, W1: Write, W2: Write> Resolver<'a, 'b, W1, W2> {
             had_error: false,
             error_writer,
             interpreter,
+            current_function: FunctionType::None,
         }
     }
 
@@ -55,7 +54,9 @@ impl<'a, 'b, W1: Write, W2: Write> Resolver<'a, 'b, W1, W2> {
 
     fn declare(&mut self, name: &IdentifierToken) {
         if let Some(innermost_scope) = self.scopes.last_mut() {
-            innermost_scope.insert(name.identifier().to_string(), false);
+            if innermost_scope.insert(name.identifier().to_string(), false).is_some() {
+                self.error(name, "Already a variable with this name in this scope.");
+            }
         }
     }
 
@@ -65,7 +66,9 @@ impl<'a, 'b, W1: Write, W2: Write> Resolver<'a, 'b, W1, W2> {
         }
     }
 
-    fn resolve_function(&mut self, function: &'b Function) {
+    fn resolve_function(&mut self, function: &'b Function, function_type: FunctionType) {
+        let enclosing = self.current_function;
+        self.current_function = function_type;
         self.begin_scope();
         for param in function.params.iter() {
             self.declare(param);
@@ -75,6 +78,7 @@ impl<'a, 'b, W1: Write, W2: Write> Resolver<'a, 'b, W1, W2> {
             self.resolve_statement(body_stmt);
         }
         self.end_scope();
+        self.current_function = enclosing;
     }
 
     fn resolve_local(&mut self, expr: &'b Expr, key: &str) {
@@ -134,7 +138,7 @@ impl<'a, 'b, W1: Write, W2: Write> Resolver<'a, 'b, W1, W2> {
                 self.declare(&function.name);
                 self.define(&function.name);
 
-                self.resolve_function(function);
+                self.resolve_function(function, FunctionType::Function);
             }
             Stmt::If(if_stmt) => {
                 self.resolve_expression(&if_stmt.condition);
@@ -147,6 +151,10 @@ impl<'a, 'b, W1: Write, W2: Write> Resolver<'a, 'b, W1, W2> {
                 self.resolve_expression(&print.expression);
             }
             Stmt::Return(return_stmt) => {
+                match self.current_function {
+                    FunctionType::None => self.error(&return_stmt.token, "Can't return from top-level code."),
+                    FunctionType::Function => {}
+                }
                 if let Some(return_stmt_stmt) = &return_stmt.value {
                     self.resolve_expression(return_stmt_stmt);
                 }
@@ -192,24 +200,43 @@ pub(crate) fn resolve<'a, 'b, W1: Write, W2: Write>(
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use crate::parser::parse;
-//     use crate::scanner::scan_tokens;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::interpreter::Interpreter;
+    use crate::parser::parse;
+    use crate::scanner::scan_tokens;
 
-//     /// Returns True if statements do not error during resolving. Otherwise false.
-//     fn resolve_from_str(s: &str) -> bool {
-//         let mut error_writer = std::io::sink();
-//         resolve(
-//             &parse(scan_tokens(s).expect("Error scanning"), &mut error_writer).expect("Error parsing"),
-//             &mut error_writer,
-//         )
-//         .is_ok()
-//     }
+    /// Returns True if statements do not error during resolving. Otherwise false.
+    fn resolves_from_str(s: &str) -> bool {
+        let mut error_writer = std::io::sink();
+        let mut interpreter = Interpreter::new(std::io::sink());
+        resolve(
+            &parse(scan_tokens(s).expect("Error scanning"), &mut error_writer).expect("Error parsing"),
+            &mut error_writer,
+            &mut interpreter,
+        )
+        .is_ok()
+    }
 
-//     #[test]
-//     fn test_use_of_var_in_declaration() {
-//         assert!(!resolve_from_str("var a; {var a=a;}"))
-//     }
-// }
+    #[test]
+    fn test_use_of_var_in_declaration() {
+        assert!(!resolves_from_str("var a; {var a=a;}"))
+    }
+
+    #[test]
+    fn test_double_declare_at_non_global_scope() {
+        assert!(!resolves_from_str("fun bad() {var a = 1; var a = 2;}"))
+    }
+
+    // This test is not valid, I actually added support for catching this during
+    // the parsing stage earlier (I went a little off-book). So parsing will
+    // fail before we can see that resolving will fail. I peeked ahead and the
+    // same kind of thing will be used for catching returns from init statements,
+    // so we'll just have to wait before we can test this machinery.
+    //
+    // #[test]
+    // fn test_top_level_return() {
+    //     assert!(!resolves_from_str("return 5;"))
+    // }
+}
