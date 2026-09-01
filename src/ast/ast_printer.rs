@@ -51,6 +51,7 @@ pub(crate) fn pretty_print_expr(expr: &Expr) -> String {
             )
         }
         Expr::This(this) => this.keyword.pretty_print(),
+        Expr::Super(s) => format!("super.{}", s.method.pretty_print()),
     }
 }
 

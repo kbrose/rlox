@@ -10,6 +10,7 @@ define_ast! {
         Call {callee: Expr, open_paren: ErrorTrackingToken, arguments: Vec<Expr>, close_paren: ErrorTrackingToken},
         Get {object: Expr, name: IdentifierToken},
         Set {object: Expr, name: IdentifierToken, value: Expr},
+        Super {keyword: IdentifierToken, method: IdentifierToken},
         This {keyword: IdentifierToken},
         Logical {left: Expr, operator: LogicalToken, right: Expr},
         Grouping {expression: Expr},

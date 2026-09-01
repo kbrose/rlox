@@ -1,9 +1,16 @@
-class Foo {
-    init() {
-        if (true) {this.x = 5; return;}
-        print "In init";
-    }
+class Doughnut {
+  cook() {
+    print "Fry until golden brown.";
+  }
 }
 
-var foo = Foo();
-print foo.x;
+class BostonCream < Doughnut {
+  cook() {
+    super.cook();
+    print "Pipe full of custard and coat with chocolate.";
+  }
+}
+
+BostonCream().cook();
+// Fry until golden brown.
+// Pipe full of custard and coat with chocolate.

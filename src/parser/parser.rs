@@ -3,7 +3,7 @@ use std::io::Write;
 use crate::{
     ast::{
         Assign, Binary, Block, Break, Call, Class, Expr, Function, Get, Grouping, If, LiteralExpr, Logical,
-        Print, Return, Set, Stmt, StmtExpression, This, Unary, Var, Variable, While,
+        Print, Return, Set, Stmt, StmtExpression, Super, This, Unary, Var, Variable, While,
     },
     parser::{
         ErrorTrackingToken,
@@ -29,7 +29,7 @@ type SResult = Result<Stmt, ParserError>;
 //                | funDecl
 //                | varDecl
 //                | statement ;
-// classDecl      → "class" IDENTIFIER "{" function* "}" ;
+// classDecl      → "class" IDENTIFIER ( "<" IDENTIFIER )? "{" function* "}" ;
 // funDecl        → "fun" function ;
 // function       → IDENTIFIER "(" parameters? ")" block ;
 // parameters     → IDENTIFIER ( "," IDENTIFIER )* ;
@@ -69,9 +69,9 @@ type SResult = Result<Stmt, ParserError>;
 // unary          → ( "!" | "-" ) unary | call ;
 // call           → primary ( "(" arguments? ")" | "." IDENTIFIER )* ;
 // arguments      → expression ( "," expression )* ;
-// primary        → NUMBER | STRING | "true" | "false" | "nil"
-//                | "(" expression ")" ;
-//                | IDENTIFIER
+// primary        → "true" | "false" | "nil" | "this"
+//                | NUMBER | STRING | IDENTIFIER | "(" expression ")"
+//                | "super" "." IDENTIFIER ;
 struct Parser<'a, W: Write> {
     tokens: &'a [Token],
     current: usize,
@@ -181,12 +181,15 @@ impl<'a, W: Write> Parser<'a, W> {
         }
     }
 
-    fn consume_identifier(&mut self, message: &str) -> Result<Option<IdentifierToken>, ParserError> {
+    fn consume_identifier(&mut self, message: &str) -> Result<IdentifierToken, ParserError> {
         if self.check(&TokenType::Identifier(String::new())) {
-            Ok(self.advance().map(|token| match &token.token_type {
-                TokenType::Identifier(identifier) => IdentifierToken::new(identifier.clone(), token.line),
-                _ => panic!("Checked for identifier, but now advance() doesn't return identifier?"),
-            }))
+            Ok(self
+                .advance()
+                .map(|token| match &token.token_type {
+                    TokenType::Identifier(identifier) => IdentifierToken::new(identifier.clone(), token.line),
+                    _ => panic!("Checked for identifier, but now advance() doesn't return identifier?"),
+                })
+                .expect("Empty advance after check."))
         } else {
             let token = self.peek();
             self.error(token.line, token.token_type.pretty_print(), message);
@@ -301,6 +304,12 @@ impl<'a, W: Write> Parser<'a, W> {
                 .expect("Missing token after consuming it?"),
         );
 
+        let superclass = if self.matches_token(&[TokenType::Less]) {
+            Some(Variable::lift(self.consume_identifier("Expect superclass name.")?))
+        } else {
+            None
+        };
+
         self.consume(TokenType::LeftBrace, "Expect '{' before class body.")?;
 
         let mut methods = vec![];
@@ -316,7 +325,7 @@ impl<'a, W: Write> Parser<'a, W> {
         }
 
         self.consume(TokenType::RightBrace, "Expect '}' after class body.")?;
-        Ok(Class::lift(name, methods))
+        Ok(Class::lift(name, superclass, methods))
     }
 
     fn function(&mut self, kind: &str) -> SResult {
@@ -399,8 +408,7 @@ impl<'a, W: Write> Parser<'a, W> {
     }
 
     fn var_declaration(&mut self) -> SResult {
-        let name =
-            self.consume_identifier("Expect variable name.")?.expect("Empty previous even after advancing?");
+        let name = self.consume_identifier("Expect variable name.")?;
 
         let initializer = if self.matches_token(&[TokenType::Equal]) {
             Some(self.expression()?)
@@ -713,9 +721,7 @@ impl<'a, W: Write> Parser<'a, W> {
                 let open_paren_line = self.previous().expect("No previous after matching").line;
                 expr = self.finish_call(expr, open_paren_line)?;
             } else if self.matches_token(&[TokenType::Dot]) {
-                let name = self
-                    .consume_identifier("Expect property name after '.'.")?
-                    .expect("Empty previous even after advancing?");
+                let name = self.consume_identifier("Expect property name after '.'.")?;
                 expr = Get::lift(expr, name);
             } else {
                 break;
@@ -768,6 +774,11 @@ impl<'a, W: Write> Parser<'a, W> {
             Ok(LiteralExpr::lift(ParsedLiteral::True))
         } else if self.matches_token(&[TokenType::Nil]) {
             Ok(LiteralExpr::lift(ParsedLiteral::Nil))
+        } else if self.matches_token(&[TokenType::Super]) {
+            let line = self.previous().expect("Empty previous even after advancing?").line;
+            self.consume(TokenType::Dot, "Expect '.' after 'super'.")?;
+            let method = self.consume_identifier("Expect superclass method name.")?;
+            Ok(Super::lift(IdentifierToken::new("super".to_string(), line), method))
         } else if self.matches_token(&[TokenType::This]) {
             let token = self.previous().expect("Empty previous even after advancing?");
             Ok(This::lift(IdentifierToken::new("this".to_string(), token.line)))

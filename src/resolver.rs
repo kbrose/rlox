@@ -19,6 +19,7 @@ enum FunctionType {
 enum ClassType {
     None,
     Class,
+    Subclass,
 }
 
 pub(crate) struct Resolver<'a, 'b, W1: Write, W2: Write> {
@@ -145,8 +146,22 @@ impl<'a, 'b, W1: Write, W2: Write> Resolver<'a, 'b, W1, W2> {
             }
             Expr::This(this) => match self.current_class {
                 ClassType::None => self.error(&this.keyword, "Can't use 'this' outside of a class."),
-                ClassType::Class => self.resolve_local(expr, "this"),
+                ClassType::Class | ClassType::Subclass => self.resolve_local(expr, "this"),
             },
+            Expr::Super(s) => {
+                match self.current_class {
+                    ClassType::None => {
+                        self.error(&s.keyword, "Can't use 'super' outside of a class.");
+                    }
+                    ClassType::Class => {
+                        self.error(&s.keyword, "Can't use 'super' in a class with no superclass.");
+                    }
+                    ClassType::Subclass => {
+                        self.resolve_local(expr, "super");
+                    }
+                };
+                self.resolve_local(expr, "super");
+            }
         }
     }
 
@@ -211,7 +226,30 @@ impl<'a, 'b, W1: Write, W2: Write> Resolver<'a, 'b, W1, W2> {
                 self.declare(&class.name);
                 self.define(&class.name);
 
+                let mut num_scopes = 0;
+
+                if let Some(superclass) = &class.superclass {
+                    self.current_class = ClassType::Subclass;
+                    match superclass {
+                        Expr::Variable(variable) => {
+                            if variable.name.identifier() == class.name.identifier() {
+                                self.error(&variable.name, "A class can't inherit from itself.");
+                            }
+                        }
+                        _ => panic!("Only Variable can be a superclass expression"),
+                    }
+                    self.resolve_expression(superclass);
+
+                    self.begin_scope();
+                    num_scopes += 1;
+                    self.scopes
+                        .last_mut()
+                        .expect("scopes is empty immediately after begin_scope()?")
+                        .insert("super".to_string(), true);
+                }
+
                 self.begin_scope();
+                num_scopes += 1;
                 self.scopes
                     .last_mut()
                     .expect("scopes is empty immediately after begin_scope()?")
@@ -225,7 +263,9 @@ impl<'a, 'b, W1: Write, W2: Write> Resolver<'a, 'b, W1, W2> {
                     }
                 }
 
-                self.end_scope();
+                for _ in 0..num_scopes {
+                    self.end_scope();
+                }
 
                 self.current_class = old_class_type;
             }
@@ -295,4 +335,11 @@ mod tests {
     // fn test_top_level_return() {
     //     assert!(!resolves_from_str("return 5;"))
     // }
+
+    #[test]
+    fn test_super_misuses() {
+        assert!(!resolves_from_str("super.hi();"));
+        assert!(!resolves_from_str("class A {f() { super.hi(); }}"));
+        assert!(resolves_from_str("class A < B {f() { super.hi(); }}"));
+    }
 }

@@ -167,7 +167,7 @@ impl LoxFunction {
         }
     }
 
-    fn bind(&self, instance: &Rc<RefCell<LoxInstance>>) -> LoxFunction {
+    pub(super) fn bind(&self, instance: &Rc<RefCell<LoxInstance>>) -> LoxFunction {
         let closure = super::environment::new_scope(&Rc::clone(&self.closure));
         // So much extra rc'ing / refcelling / cloning here...
         closure.borrow_mut().define(
@@ -296,20 +296,32 @@ impl<W: Write> LoxCallable<W> for Rc<LoxFunction> {
 #[derive(Debug, PartialEq, Clone)]
 pub(crate) struct LoxClass {
     name: String,
+    superclass: Option<Rc<LoxClass>>,
     methods: HashMap<String, Rc<LoxFunction>>,
 }
 
 impl LoxClass {
-    pub(crate) fn new(name: String, methods: HashMap<String, LoxFunction>) -> Self {
+    pub(crate) fn new(
+        name: String,
+        superclass: Option<Rc<LoxClass>>,
+        methods: HashMap<String, LoxFunction>,
+    ) -> Self {
         let methods = methods.into_iter().map(|(key, value)| (key, Rc::new(value))).collect();
         Self {
             name,
+            superclass,
             methods,
         }
     }
 
-    fn find_method(&self, name: &str) -> Option<&Rc<LoxFunction>> {
-        self.methods.get(name)
+    pub(super) fn find_method(&self, name: &str) -> Option<&Rc<LoxFunction>> {
+        if let Some(method) = self.methods.get(name) {
+            Some(method)
+        } else if let Some(superclass) = &self.superclass {
+            superclass.find_method(name)
+        } else {
+            None
+        }
     }
 }
 

@@ -5,7 +5,7 @@ use crate::{
     interpreter::{
         EnvironmentWrapper,
         callables::LoxCallable,
-        environment::{Environment, get_from_env_at, set_from_env_at},
+        environment::{Environment, get_from_env_at, new_scope, set_from_env_at},
         lox_object::{LoxClass, LoxFunction, LoxObject, get_from_instance, set_from_instance},
     },
     parser::IdentifierToken,
@@ -263,6 +263,36 @@ impl<W: Write> Interpreter<W> {
                 }
             }
             Expr::This(this) => self.look_up_variable(&this.keyword, expr),
+            Expr::Super(super_stmt) => {
+                let distance = self.locals.get(&expr).expect("Uh ...");
+                let superclass =
+                    get_from_env_at(Rc::clone(&self.environment), &super_stmt.keyword, *distance)
+                        .map_err(|e| EvaluationException::from(e))?;
+
+                let object = get_from_env_at(
+                    Rc::clone(&self.environment),
+                    &IdentifierToken::new("this".to_string(), 0),
+                    *distance - 1,
+                )
+                .map_err(|e| EvaluationException::from(e))?;
+
+                match (superclass.as_ref(), object.as_ref()) {
+                    (LoxObject::LoxClass(superclass), LoxObject::LoxInstance(instance)) => {
+                        let maybe_method = superclass.find_method(super_stmt.method.identifier());
+                        match maybe_method {
+                            Some(method) => {
+                                Ok(Rc::new(LoxObject::LoxFunction(method.bind(&instance.clone()))))
+                            }
+                            None => Err(RuntimeError::new(
+                                &super_stmt.method,
+                                format!("Undefined property {}.", super_stmt.method.identifier()),
+                            )
+                            .into()),
+                        }
+                    }
+                    _ => panic!("Uh..."),
+                }
+            }
         }
     }
 
@@ -298,7 +328,7 @@ impl<W: Write> Interpreter<W> {
             }
             Stmt::Block(block) => {
                 let previous_environment = Rc::clone(&self.environment);
-                self.environment = crate::interpreter::environment::new_scope(&Rc::clone(&self.environment));
+                self.environment = new_scope(&Rc::clone(&self.environment));
                 let out = self.execute_block(block);
                 self.environment = previous_environment;
                 out
@@ -326,7 +356,7 @@ impl<W: Write> Interpreter<W> {
             }
             Stmt::Break(_) => Ok(LoopControlFlow::Break),
             Stmt::Function(function) => {
-                let closure = crate::interpreter::environment::new_scope(&Rc::clone(&self.environment));
+                let closure = new_scope(&Rc::clone(&self.environment));
                 let defined_function =
                     Rc::new(LoxObject::LoxFunction(LoxFunction::new((*function).clone(), closure, false)));
                 self.environment.borrow_mut().define(&function.name, &defined_function);
@@ -340,7 +370,36 @@ impl<W: Write> Interpreter<W> {
                 Err(EvaluationException::Return(out))
             }
             Stmt::Class(class) => {
-                self.environment.borrow_mut().define(&class.name, &Rc::new(LoxObject::Nil));
+                let (superclass, old_environment) = if let Some(superclass) = &class.superclass {
+                    let superclass = match superclass {
+                        Expr::Variable(superclass_variable) => {
+                            let evaluated_superclass = self.evaluate(superclass)?;
+                            match evaluated_superclass.as_ref() {
+                                LoxObject::LoxClass(lox_class) => lox_class.clone(),
+                                _ => {
+                                    return Err(RuntimeError::new(
+                                        &superclass_variable.name,
+                                        "Superclass must be a class.".to_string(),
+                                    )
+                                    .into());
+                                }
+                            }
+                        }
+                        _ => panic!("Should be unreachable! This was checked during resolving."),
+                    };
+                    self.environment.borrow_mut().define(&class.name, &Rc::new(LoxObject::Nil));
+                    let old_environment = Some(self.environment.clone());
+                    let closure = new_scope(&Rc::clone(&self.environment));
+                    closure.borrow_mut().define(
+                        &IdentifierToken::new("super".to_string(), 0),
+                        &Rc::new(LoxObject::LoxClass(superclass.clone())),
+                    );
+                    self.environment = closure;
+                    (Some(superclass), old_environment)
+                } else {
+                    self.environment.borrow_mut().define(&class.name, &Rc::new(LoxObject::Nil));
+                    (None, None)
+                };
 
                 let mut methods = HashMap::new();
                 for method in class.methods.iter() {
@@ -354,8 +413,14 @@ impl<W: Write> Interpreter<W> {
 
                 let lox_class = Rc::new(LoxObject::LoxClass(Rc::new(LoxClass::new(
                     class.name.identifier().to_string(),
+                    superclass,
                     methods,
                 ))));
+
+                if let Some(old_environment) = old_environment {
+                    self.environment = old_environment;
+                }
+
                 self.environment
                     .borrow_mut()
                     .assign(&class.name, &lox_class)
@@ -898,6 +963,54 @@ mod tests {
 
                 var foo = Foo();
                 print foo.x;
+                "#
+            )
+        );
+    }
+
+    #[test]
+    fn test_inherit_methods() {
+        assert_eq!(
+            // Note that "In init" is NOT printed
+            String::from("Fry until golden brown.\n"),
+            execute_stmts(
+                r#"
+                class Doughnut {
+                  cook() {
+                    print "Fry until golden brown.";
+                  }
+                }
+
+                class BostonCream < Doughnut {}
+
+                BostonCream().cook();
+
+                "#
+            )
+        );
+    }
+
+    #[test]
+    fn test_super_methods() {
+        assert_eq!(
+            // Note that "In init" is NOT printed
+            String::from("Fry until golden brown.\nPipe full of custard and coat with chocolate.\n"),
+            execute_stmts(
+                r#"
+                class Doughnut {
+                  cook() {
+                    print "Fry until golden brown.";
+                  }
+                }
+
+                class BostonCream < Doughnut {
+                  cook() {
+                    super.cook();
+                    print "Pipe full of custard and coat with chocolate.";
+                  }
+                }
+
+                BostonCream().cook();
                 "#
             )
         );

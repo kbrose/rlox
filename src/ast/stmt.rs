@@ -11,7 +11,7 @@ define_ast! {
         Var {name: IdentifierToken, initializer: Option<Expr>},
         While {condition: Expr, body: Stmt},
         Block {statements: Vec<Stmt>},
-        Class {name: IdentifierToken, methods: Vec<Function>},
+        Class {name: IdentifierToken, superclass: Option<Expr>, methods: Vec<Function>},
         Break {},
     }
 }
