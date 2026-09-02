@@ -1,16 +1,29 @@
-class Doughnut {
-  cook() {
-    print "Fry until golden brown.";
+// Return '.' if the two values are equal, otherwise return 'x'.
+// This is not really an assertion, but it's what we have in the language...
+fun assert_equal(a, b) {
+  if (a == b) {
+    return ".";
+  } else {
+    return "x";
   }
 }
 
-class BostonCream < Doughnut {
-  cook() {
-    super.cook();
-    print "Pipe full of custard and coat with chocolate.";
-  }
+fun test_subclass() {
+    class Doughnut {
+    cook() {
+        return "Fry until golden brown.";
+    }
+    }
+
+    class BostonCream < Doughnut {
+    cook() {
+        var out = super.cook();
+        return out + " " + "Pipe full of custard and coat with chocolate.";
+    }
+    }
+
+    return assert_equal(BostonCream().cook(), "Fry until golden brown. Pipe full of custard and coat with chocolate.");
 }
 
-BostonCream().cook();
-// Fry until golden brown.
-// Pipe full of custard and coat with chocolate.
+print(test_subclass);
+print(test_subclass());
