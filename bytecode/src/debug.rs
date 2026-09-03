@@ -1,62 +1,95 @@
+use std::io::Write;
+
 use crate::bytecode::{Chunk, OpCode};
 
-pub(crate) fn disassemble_chunk(chunk: &Chunk, name: &str) {
-    println!("== {} ==", name);
-
-    let mut offset = 0;
-    let mut prev_line = usize::MAX;
-    while offset < chunk.count() {
-        (offset, prev_line) = disassemble_instruction(chunk, offset, prev_line);
-    }
+#[allow(unused)]
+pub(crate) struct Disassembler<W: Write> {
+    writer: W,
+    prev_line: usize,
 }
 
-fn disassemble_instruction(chunk: &Chunk, offset: usize, prev_line: usize) -> (usize, usize) {
-    print!("{offset:04} ");
-
-    let line = chunk.line_at_index(offset);
-    if line != prev_line {
-        print!("{line:04} ");
-    } else {
-        print!("   | ");
+#[allow(unused)]
+impl<W: Write> Disassembler<W> {
+    pub(crate) fn new(writer: W) -> Self {
+        Self {
+            writer,
+            prev_line: usize::MAX,
+        }
     }
 
-    let maybe_op = chunk.op_at_index(offset);
-    let offset = match maybe_op {
-        Ok(op @ OpCode::OpReturn) => simple_instruction(&op.dis_string(), offset),
-        Ok(op @ OpCode::OpConstant) => constant_instruction(&op.dis_string(), chunk, offset),
-        Ok(op @ OpCode::OpConstantLong) => {
-            constant_long_instruction(&op.dis_string(), chunk, offset)
+    pub(crate) fn disassemble_chunk(&mut self, chunk: &Chunk, name: &str) {
+        writeln!(self.writer, "== {} ==", name).unwrap();
+
+        let mut offset = 0;
+        while offset < chunk.count() {
+            (offset, self.prev_line) = self.disassemble_instruction(chunk, offset);
         }
-        Err(byte) => {
-            println!("Unknown op code {byte}");
-            offset + 1
+    }
+
+    pub(crate) fn disassemble_instruction(
+        &mut self,
+        chunk: &Chunk,
+        offset: usize,
+    ) -> (usize, usize) {
+        write!(self.writer, "{offset:04} ");
+
+        let line = chunk.line_at_index(offset);
+        if line != self.prev_line {
+            write!(self.writer, "{line:04} ").unwrap();
+        } else {
+            write!(self.writer, "   | ").unwrap();
         }
-    };
-    (offset, line)
-}
 
-fn constant_instruction(name: &str, chunk: &Chunk, offset: usize) -> usize {
-    let constant_idx = chunk.byte_at_index(offset + 1);
-    print!("{:<16} {:4} ", name, constant_idx);
-    chunk.constant_at_index(constant_idx as usize).print();
-    println!();
-    offset + 2
-}
+        let maybe_op = chunk.op_at_index(offset);
+        let offset = match maybe_op {
+            // Simple instructions
+            Ok(
+                op @ (OpCode::OpReturn
+                | OpCode::OpNegate
+                | OpCode::OpAdd
+                | OpCode::OpSubtract
+                | OpCode::OpMultiply
+                | OpCode::OpDivide),
+            ) => self.simple_instruction(&op.dis_string(), offset),
+            // Constant loading instructions
+            Ok(op @ OpCode::OpConstant) => {
+                self.constant_instruction(&op.dis_string(), chunk, offset)
+            }
+            Ok(op @ OpCode::OpConstantLong) => {
+                self.constant_long_instruction(&op.dis_string(), chunk, offset)
+            }
+            // Something else?
+            Err(byte) => {
+                writeln!(self.writer, "Unknown op code {byte}").unwrap();
+                offset + 1
+            }
+        };
+        (offset, line)
+    }
 
-fn constant_long_instruction(name: &str, chunk: &Chunk, offset: usize) -> usize {
-    let constant_idx = (chunk.byte_at_index(offset + 1) as usize)
-        | ((chunk.byte_at_index(offset + 2) as usize) << 8)
-        | ((chunk.byte_at_index(offset + 3) as usize) << 16);
+    fn constant_instruction(&mut self, name: &str, chunk: &Chunk, offset: usize) -> usize {
+        let constant_idx = chunk.byte_at_index(offset + 1);
+        write!(self.writer, "{:<16} {:4} ", name, constant_idx).unwrap();
+        chunk.constant_at_index(constant_idx as usize).print();
+        writeln!(self.writer).unwrap();
+        offset + 2
+    }
 
-    print!("{:<16} {:4} ", name, constant_idx);
-    chunk.constant_at_index(constant_idx).print();
-    println!();
-    offset + 4
-}
+    fn constant_long_instruction(&mut self, name: &str, chunk: &Chunk, offset: usize) -> usize {
+        let constant_idx = (chunk.byte_at_index(offset + 1) as usize)
+            | ((chunk.byte_at_index(offset + 2) as usize) << 8)
+            | ((chunk.byte_at_index(offset + 3) as usize) << 16);
 
-fn simple_instruction(name: &str, offset: usize) -> usize {
-    println!("{name}");
-    offset + 1
+        write!(self.writer, "{:<16} {:4} ", name, constant_idx).unwrap();
+        chunk.constant_at_index(constant_idx).print();
+        writeln!(self.writer).unwrap();
+        offset + 4
+    }
+
+    fn simple_instruction(&mut self, name: &str, offset: usize) -> usize {
+        writeln!(self.writer, "{name}").unwrap();
+        offset + 1
+    }
 }
 
 #[cfg(test)]
@@ -67,11 +100,12 @@ mod tests {
     fn test_constant_long_runs() {
         let mut chunk = Chunk::new();
         for i in 0..300 {
-            chunk.write_constant(crate::value::Value::Number(i as f64), 123);
+            chunk.write_constant(crate::value::Value::new(i as f64), 123);
         }
-        // chunk.write_constant(value::Value::Number(1.2), 123);
+        // chunk.write_constant(value::Value::new(1.2), 123);
         chunk.write_op(OpCode::OpReturn, 123);
 
-        disassemble_chunk(&chunk, "test chunk");
+        let mut disassembler = Disassembler::new(std::io::sink());
+        disassembler.disassemble_chunk(&chunk, "test chunk");
     }
 }

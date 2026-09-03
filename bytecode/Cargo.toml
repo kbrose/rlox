@@ -7,5 +7,8 @@ edition = "2024"
 
 [features]
 default = []
+# default = ["debug_trace_execution"]
 
 timings = []
+
+debug_trace_execution = []

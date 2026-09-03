@@ -1,15 +1,22 @@
 use crate::value::Value;
 
+#[allow(unused)]
 #[repr(u8)]
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum OpCode {
     OpConstantLong,
     OpConstant,
+    OpAdd,
+    OpSubtract,
+    OpMultiply,
+    OpDivide,
+    OpNegate,
     OpReturn,
 }
 
 const LAST_OP_CODE: OpCode = OpCode::OpReturn;
 
+#[allow(unused)]
 impl OpCode {
     #[inline]
     pub(crate) fn to_byte(self: Self) -> u8 {
@@ -34,13 +41,20 @@ impl OpCode {
 
     pub(crate) fn dis_string(&self) -> String {
         match self {
-            Self::OpConstant => "OP_CONSTANT".to_string(),
-            Self::OpReturn => "OP_RETURN".to_string(),
-            Self::OpConstantLong => "OP_CONSTANT_LONG".to_string(),
+            Self::OpConstant => "OP_CONSTANT",
+            Self::OpReturn => "OP_RETURN",
+            Self::OpConstantLong => "OP_CONSTANT_LONG",
+            Self::OpNegate => "OP_NEGATE",
+            Self::OpAdd => "OP_ADD",
+            Self::OpSubtract => "OP_SUBTRACT",
+            Self::OpMultiply => "OP_MULTIPLY",
+            Self::OpDivide => "OP_DIVIDE",
         }
+        .to_string()
     }
 }
 
+#[derive(Clone)]
 struct Lines {
     /// cumulative_run_counts[i] is the total number of instructions that
     /// exist on lines 0 up through i. (This enables binary searching.)
@@ -51,10 +65,12 @@ struct Lines {
     prev: usize,
 }
 
+#[allow(unused)]
 impl Lines {
     fn new() -> Self {
         Lines {
             cumulative_run_counts: vec![],
+            #[cfg(debug_assertions)]
             prev: 0,
         }
     }
@@ -111,12 +127,14 @@ impl Lines {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct Chunk {
     code: Vec<u8>,
     constants: Vec<Value>,
     lines: Lines,
 }
 
+#[allow(unused)]
 impl Chunk {
     pub(crate) fn new() -> Self {
         Self {
@@ -158,9 +176,15 @@ impl Chunk {
         unsafe { OpCode::from_byte_unchecked(*self.code.get_unchecked(offset)) }
     }
 
-    /// Get the constant
+    /// Get the constant at the given index.
+    ///
+    /// PANICS if `constant_idx` is out of bounds.
     pub(crate) fn constant_at_index(&self, constant_idx: usize) -> &Value {
         &self.constants[constant_idx]
+    }
+
+    pub(crate) unsafe fn constant_at_index_unchecked(&self, constant_idx: usize) -> &Value {
+        unsafe { self.constants.get_unchecked(constant_idx) }
     }
 
     // I'm a little worried that these write functions hide the allocation. The
@@ -300,12 +324,12 @@ mod tests {
         let mut chunk = Chunk::new();
         // First 256 constants should be just OpConstant
         for i in 0..=0xFF {
-            chunk.write_constant(crate::value::Value::Number(i as f64), 123);
+            chunk.write_constant(crate::value::Value::new(i as f64), 123);
             assert!(chunk.code[chunk.code.len() - 2] == OpCode::OpConstant.to_byte());
         }
         // All other constants should be OpConstantLong
         for i in 0..=0xFF {
-            chunk.write_constant(crate::value::Value::Number(i as f64), 123);
+            chunk.write_constant(crate::value::Value::new(i as f64), 123);
             assert!(chunk.code[chunk.code.len() - 4] == OpCode::OpConstantLong.to_byte());
         }
     }
