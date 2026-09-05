@@ -38,7 +38,8 @@ impl VirtualMachine {
     }
 
     fn run(&mut self, chunk: Chunk) -> InterpretResult {
-        let mut ip = 0;
+        // let mut ip = 0;
+        let mut ip = chunk.code.as_ptr();
 
         #[cfg(feature = "debug_trace_execution")]
         let mut disassembler = {
@@ -51,30 +52,30 @@ impl VirtualMachine {
             #[cfg(feature = "debug_trace_execution")]
             {
                 print!("          ");
-                for value in self.stack.iter() {
+                for value in self.stack.stack().iter() {
                     print!("[ ");
                     value.print();
                     print!(" ]");
                 }
                 println!();
-                disassembler.disassemble_instruction(&chunk, ip);
+                disassembler.disassemble_instruction(&chunk, unsafe {
+                    ip.offset_from_unsigned(chunk.code.as_ptr())
+                });
             }
 
-            let op = unsafe { chunk.op_unchecked_at_index_unchecked(post_increment(&mut ip)) };
+            let op = unsafe { OpCode::from_byte_unchecked(*post_increment(&mut ip)) };
             match op {
                 OpCode::OpConstantLong => {
-                    let constant_idx = (chunk.byte_at_index(post_increment(&mut ip)) as usize)
-                        | ((chunk.byte_at_index(post_increment(&mut ip)) as usize) << 8)
-                        | ((chunk.byte_at_index(post_increment(&mut ip)) as usize) << 16);
+                    let constant_idx = (unsafe { *(post_increment(&mut ip)) } as usize)
+                        | ((unsafe { *(post_increment(&mut ip)) } as usize) << 8)
+                        | ((unsafe { *(post_increment(&mut ip)) } as usize) << 16);
 
                     let constant = unsafe { chunk.constant_at_index_unchecked(constant_idx) };
                     self.stack.push(*constant);
                 }
                 OpCode::OpConstant => {
                     let constant = unsafe {
-                        chunk.constant_at_index_unchecked(
-                            chunk.byte_at_index(post_increment(&mut ip)) as usize,
-                        )
+                        chunk.constant_at_index_unchecked(*(post_increment(&mut ip)) as usize)
                     };
                     self.stack.push(*constant);
                 }
@@ -100,9 +101,17 @@ impl VirtualMachine {
     }
 }
 
+// /// An implementation of C's `x++`
+// fn post_increment(x: &mut usize) -> usize {
+//     let out = *x;
+//     *x += 1;
+//     out
+// }
+
 /// An implementation of C's `x++`
-fn post_increment(x: &mut usize) -> usize {
+/// SAFETY: Assumes x.add(1) is still in bounds
+fn post_increment(x: &mut *const u8) -> *const u8 {
     let out = *x;
-    *x += 1;
+    *x = unsafe { x.add(1) };
     out
 }
