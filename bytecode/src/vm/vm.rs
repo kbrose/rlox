@@ -1,6 +1,7 @@
 use crate::{
     bytecode::{Chunk, OpCode},
     value::Value,
+    vm::stack::Stack,
 };
 
 #[allow(unused)]
@@ -14,67 +15,26 @@ pub(crate) enum InterpretResult {
 const STACK_MAX: usize = 256;
 
 pub(crate) struct VirtualMachine {
-    stack: Vec<Value>, // TODO: C version uses an array for this.
+    stack: Stack, // TODO: C version uses an array for this.
 }
 
 impl VirtualMachine {
     pub(crate) fn new() -> Self {
         Self {
-            stack: Vec::with_capacity(STACK_MAX),
+            stack: Stack::new(STACK_MAX),
         }
     }
 
     pub(crate) fn free(&mut self) {}
 
-    fn push(&mut self, value: Value) {
-        // Option 1: pointer manipulation, assumes self.stack has capacity
-        // This does perform more pointer manipulation than the book, though!
-        unsafe {
-            let len = self.stack.len();
-            let ptr = self.stack.as_mut_ptr().add(len);
-            std::ptr::write(ptr, value);
-            self.stack.set_len(len + 1);
-        }
-
-        // Option 2: No assumptions, but also faster
-        // self.stack.push(value);
-    }
-
-    fn pop(&mut self) -> Value {
-        // Option 1: pointer manipulation, assumes self.stack is non-empty
-        // This does perform more pointer manipulation than the book, though!
-        // unsafe {
-        //     let len = self.stack.len();
-        //     let ptr = self.stack.as_ptr().add(len - 1);
-        //     let out = std::ptr::read(ptr);
-        //     self.stack.set_len(len - 1);
-        //     out
-        // }
-
-        // Option 2: Also assumes self.stack is non-empty.
-        // match self.stack.pop() {
-        //     Some(value) => value,
-        //     None => unsafe {
-        //         use std::hint::unreachable_unchecked;
-        //         unreachable_unchecked()
-        //     },
-        // }
-
-        // Option 3: No assumptions, but also faster
-        match self.stack.pop() {
-            Some(value) => value,
-            None => unreachable!(),
-        }
-    }
-
     pub(crate) fn interpret(&mut self, chunk: Chunk) -> InterpretResult {
         self.run(chunk)
     }
 
+    #[inline]
     fn binary_op(&mut self, f: impl Fn(Value, Value) -> Value) {
-        let b = self.pop();
-        let a = self.pop();
-        self.push(f(a, b));
+        let b = self.stack.pop();
+        self.stack.apply_to_top(|a| f(a, b));
     }
 
     fn run(&mut self, chunk: Chunk) -> InterpretResult {
@@ -108,7 +68,7 @@ impl VirtualMachine {
                         | ((chunk.byte_at_index(post_increment(&mut ip)) as usize) << 16);
 
                     let constant = unsafe { chunk.constant_at_index_unchecked(constant_idx) };
-                    self.push(*constant);
+                    self.stack.push(*constant);
                 }
                 OpCode::OpConstant => {
                     let constant = unsafe {
@@ -116,19 +76,18 @@ impl VirtualMachine {
                             chunk.byte_at_index(post_increment(&mut ip)) as usize,
                         )
                     };
-                    self.push(*constant);
+                    self.stack.push(*constant);
                 }
                 OpCode::OpAdd => self.binary_op(|a, b| a + b),
                 OpCode::OpSubtract => self.binary_op(|a, b| a - b),
                 OpCode::OpMultiply => self.binary_op(|a, b| a * b),
                 OpCode::OpDivide => self.binary_op(|a, b| a / b),
                 OpCode::OpNegate => {
-                    let value = self.pop();
-                    self.push(-value)
+                    self.stack.apply_to_top(|value| -value);
                 }
                 OpCode::OpReturn => {
                     #[allow(unused)]
-                    let out = self.pop();
+                    let out = self.stack.pop();
                     #[cfg(feature = "debug_trace_execution")]
                     {
                         out.print();

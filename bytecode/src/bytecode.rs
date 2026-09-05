@@ -25,7 +25,7 @@ impl OpCode {
     }
 
     #[inline]
-    unsafe fn from_byte_unchecked(byte: u8) -> OpCode {
+    pub(crate) unsafe fn from_byte_unchecked(byte: u8) -> OpCode {
         // SAFETY: byte must be <= the largest discriminant of OpCode.
         unsafe { std::mem::transmute(byte) }
     }
@@ -93,34 +93,25 @@ impl Lines {
         *self.cumulative_run_counts.last_mut().unwrap() += 1;
     }
 
-    /// Gets the (0-indexed) line number. If the requested instruction_index
-    /// is out of the range, then the largest line number observed PLUS ONE
-    /// is returned, unless no line numbers have been observed in which
-    /// case 0 is returned.
+    /// Gets the (0-indexed) line number. If the requested `instruction_index`
+    /// is out of the range, then the _next largest_ line number will be
+    /// returned. Note: if no lines have been observed yet, then 0 is
+    /// the next largest.
     fn get_line(&self, instruction_index: usize) -> usize {
         match self
             .cumulative_run_counts
             .binary_search(&(instruction_index + 1))
         {
-            Ok(exact_match) => {
-                if exact_match == 0 {
-                    exact_match
-                } else {
-                    // Binary search can return any index that matches. We always want
-                    // the lowest index that matches.
-                    let mut i = exact_match - 1;
+            Ok(mut i) => {
+                // Binary search can return any index that matches. We always want
+                // the lowest index that matches counts with the returned index.
+                let target_count = self.cumulative_run_counts[i];
 
-                    while i > 0 {
-                        if self.cumulative_run_counts[i] == self.cumulative_run_counts[exact_match]
-                        {
-                            i -= 1;
-                        } else {
-                            break;
-                        }
-                    }
-
-                    i + 1
+                while (i > 0) && (self.cumulative_run_counts[i - 1] == target_count) {
+                    i -= 1;
                 }
+
+                i
             }
             Err(where_to_insert) => where_to_insert,
         }
@@ -129,7 +120,7 @@ impl Lines {
 
 #[derive(Clone)]
 pub(crate) struct Chunk {
-    code: Vec<u8>,
+    pub(crate) code: Vec<u8>,
     constants: Vec<Value>,
     lines: Lines,
 }
@@ -277,33 +268,37 @@ mod tests {
     }
 
     #[test]
-    fn test_discriminant() {
-        assert_eq!(OpCode::OpReturn.to_byte(), 2);
+    fn test_opcode_roundtrips_byte() {
+        for i in 0..u8::MAX {
+            if let Some(op) = OpCode::from_byte(i) {
+                assert_eq!(op.to_byte(), i);
+            }
+        }
     }
 
     #[test]
     fn test_line_numbers() {
         let mut lines = Lines::new();
-        println!("{:?}", lines.cumulative_run_counts);
+        println!("empty :\n{:?}", lines.cumulative_run_counts);
 
         assert_eq!(lines.get_line(0), 0);
 
         // Instruction 1
         lines.add_instruction_line(0);
-        println!("\n{:?}", lines.cumulative_run_counts);
+        println!("instr1:\n{:?}", lines.cumulative_run_counts);
         assert_eq!(lines.get_line(0), 0);
         assert_eq!(lines.get_line(1), 1);
 
         // Instruction 2
         lines.add_instruction_line(0);
-        println!("\n{:?}", lines.cumulative_run_counts);
+        println!("instr2:\n{:?}", lines.cumulative_run_counts);
         assert_eq!(lines.get_line(0), 0);
         assert_eq!(lines.get_line(1), 0);
         assert_eq!(lines.get_line(2), 1);
 
         // Instruction 3
         lines.add_instruction_line(1);
-        println!("\n{:?}", lines.cumulative_run_counts);
+        println!("instr3:\n{:?}", lines.cumulative_run_counts);
         assert_eq!(lines.get_line(0), 0);
         assert_eq!(lines.get_line(1), 0);
         assert_eq!(lines.get_line(2), 1);
@@ -311,7 +306,7 @@ mod tests {
 
         // Instruction 4
         lines.add_instruction_line(5);
-        println!("\n{:?}", lines.cumulative_run_counts);
+        println!("instr4:\n{:?}", lines.cumulative_run_counts);
         assert_eq!(lines.get_line(0), 0);
         assert_eq!(lines.get_line(1), 0);
         assert_eq!(lines.get_line(2), 1);

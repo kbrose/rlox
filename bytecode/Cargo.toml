@@ -12,3 +12,5 @@ default = []
 timings = []
 
 debug_trace_execution = []
+
+unsafe_stack = []
