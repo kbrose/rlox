@@ -280,13 +280,24 @@ impl StateMachine {
                 }
                 Err(e) => (None, Some(e)),
             },
-            Self::NumberWithDecimal(s) => match Self::process_number(' ', s, true) {
-                Ok(([first, second], _)) => {
-                    debug_assert!(second.is_none());
-                    (first, None)
+            Self::NumberWithDecimal(s) => {
+                if s.ends_with('.') {
+                    (
+                        None,
+                        Some(StateMachineError {
+                            message: format!("Number cannot end with trailing '.': {s}"),
+                        }),
+                    )
+                } else {
+                    match Self::process_number(' ', s, true) {
+                        Ok(([first, second], _)) => {
+                            debug_assert!(second.is_none());
+                            (first, None)
+                        }
+                        Err(e) => (None, Some(e)),
+                    }
                 }
-                Err(e) => (None, Some(e)),
-            },
+            }
             Self::InsideIdentifier(s) => match Self::process_identifier(' ', s) {
                 Ok(([first, second], _)) => {
                     debug_assert!(second.is_none());
@@ -389,6 +400,7 @@ mod tests {
         scan_tokens("%").expect_err("Failed to error while scanning invalid source");
         scan_tokens("asdf%").expect_err("Failed to error while scanning invalid source");
         scan_tokens("1234%").expect_err("Failed to error while scanning invalid source");
+        scan_tokens("1234.").expect_err("Failed to error while scanning invalid source");
     }
 
     #[test]
