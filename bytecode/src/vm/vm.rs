@@ -1,5 +1,6 @@
 use crate::{
     bytecode::{Chunk, OpCode},
+    compiler::compile,
     value::Value,
     vm::stack::Stack,
 };
@@ -15,7 +16,7 @@ pub(crate) enum InterpretResult {
 const STACK_MAX: usize = 256;
 
 pub(crate) struct VirtualMachine {
-    stack: Stack, // TODO: C version uses an array for this.
+    stack: Stack,
 }
 
 impl VirtualMachine {
@@ -27,8 +28,10 @@ impl VirtualMachine {
 
     pub(crate) fn free(&mut self) {}
 
-    pub(crate) fn interpret(&mut self, chunk: Chunk) -> InterpretResult {
-        self.run(chunk)
+    pub(crate) fn interpret(&mut self, source: String) -> InterpretResult {
+        compile(&source);
+        InterpretResult::InterpretOk
+        // self.run(chunk)
     }
 
     #[inline]
