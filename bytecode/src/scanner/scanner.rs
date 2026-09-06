@@ -1,9 +1,7 @@
 use crate::scanner::token::{Token, TokenType};
-// use anyhow::{Result, anyhow};
-use std::collections::HashMap;
+
 use std::fmt;
 use std::io::Write;
-use std::sync::LazyLock;
 
 #[derive(Debug)]
 struct ScanError {
@@ -16,28 +14,6 @@ impl fmt::Display for ScanError {
         write!(f, "[Scan Error line: {}] {}", self.line, self.message)
     }
 }
-
-static KEYWORD_MAP: LazyLock<HashMap<&'static str, TokenType>> = LazyLock::new(|| {
-    HashMap::from([
-        ("and", TokenType::And),
-        ("class", TokenType::Class),
-        ("else", TokenType::Else),
-        ("false", TokenType::False),
-        ("for", TokenType::For),
-        ("fun", TokenType::Fun),
-        ("if", TokenType::If),
-        ("nil", TokenType::Nil),
-        ("or", TokenType::Or),
-        ("print", TokenType::Print),
-        ("return", TokenType::Return),
-        ("super", TokenType::Super),
-        ("this", TokenType::This),
-        ("true", TokenType::True),
-        ("var", TokenType::Var),
-        ("while", TokenType::While),
-        ("break", TokenType::Break),
-    ])
-});
 
 struct StateMachineError {
     message: String,
@@ -461,6 +437,29 @@ impl StateMachine {
         }
     }
 
+    fn keyword_or_identifier(lexeme: &str) -> TokenType {
+        match lexeme {
+            "and" => TokenType::And,
+            "break" => TokenType::Break,
+            "class" => TokenType::Class,
+            "else" => TokenType::Else,
+            "false" => TokenType::False,
+            "for" => TokenType::For,
+            "fun" => TokenType::Fun,
+            "if" => TokenType::If,
+            "nil" => TokenType::Nil,
+            "or" => TokenType::Or,
+            "print" => TokenType::Print,
+            "return" => TokenType::Return,
+            "super" => TokenType::Super,
+            "this" => TokenType::This,
+            "true" => TokenType::True,
+            "var" => TokenType::Var,
+            "while" => TokenType::While,
+            _ => TokenType::Identifier,
+        }
+    }
+
     fn process_identifier<'a>(
         process_input: ProcessInput<'a>,
         lexeme_start: LexemeStart,
@@ -472,10 +471,9 @@ impl StateMachine {
             )),
             _ => {
                 let lexeme = &process_input.source[lexeme_start.0..process_input.char_start];
-                let token_type = match KEYWORD_MAP.get(lexeme) {
-                    Some(token_type) => *token_type,
-                    None => TokenType::Identifier,
-                };
+
+                let token_type = Self::keyword_or_identifier(lexeme);
+
                 let token = token_type.to_token(process_input.line, lexeme);
 
                 let (maybe_token, next_state) = Self::process_top_level(process_input)?;
@@ -517,10 +515,7 @@ impl StateMachine {
             }
             Self::InsideIdentifier(lexeme_start) => {
                 let lexeme = &source[lexeme_start.0..];
-                let token_type = match KEYWORD_MAP.get(lexeme) {
-                    Some(token_type) => *token_type,
-                    None => TokenType::Identifier,
-                };
+                let token_type = Self::keyword_or_identifier(lexeme);
                 let token = token_type.to_token(line, lexeme);
 
                 (Some(token), None)
@@ -737,7 +732,26 @@ mod tests {
 
     #[test]
     fn test_keywords() {
-        for (key, val) in KEYWORD_MAP.iter() {
+        let keywords_token_types = vec![
+            ("and", TokenType::And),
+            ("break", TokenType::Break),
+            ("class", TokenType::Class),
+            ("else", TokenType::Else),
+            ("false", TokenType::False),
+            ("for", TokenType::For),
+            ("fun", TokenType::Fun),
+            ("if", TokenType::If),
+            ("nil", TokenType::Nil),
+            ("or", TokenType::Or),
+            ("print", TokenType::Print),
+            ("return", TokenType::Return),
+            ("super", TokenType::Super),
+            ("this", TokenType::This),
+            ("true", TokenType::True),
+            ("var", TokenType::Var),
+            ("while", TokenType::While),
+        ];
+        for (key, val) in keywords_token_types.into_iter() {
             let source = &format!("({key})");
             let tokens = scan_to_completion(source).unwrap();
             assert_eq!(
