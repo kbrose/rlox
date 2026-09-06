@@ -44,18 +44,16 @@ impl<W: Write> Disassembler<W> {
         let offset = match maybe_op {
             // Simple instructions
             Ok(
-                op @ (OpCode::OpReturn
-                | OpCode::OpNegate
-                | OpCode::OpAdd
-                | OpCode::OpSubtract
-                | OpCode::OpMultiply
-                | OpCode::OpDivide),
+                op @ (OpCode::Return
+                | OpCode::Negate
+                | OpCode::Add
+                | OpCode::Subtract
+                | OpCode::Multiply
+                | OpCode::Divide),
             ) => self.simple_instruction(&op.dis_string(), offset),
             // Constant loading instructions
-            Ok(op @ OpCode::OpConstant) => {
-                self.constant_instruction(&op.dis_string(), chunk, offset)
-            }
-            Ok(op @ OpCode::OpConstantLong) => {
+            Ok(op @ OpCode::Constant) => self.constant_instruction(&op.dis_string(), chunk, offset),
+            Ok(op @ OpCode::ConstantLong) => {
                 self.constant_long_instruction(&op.dis_string(), chunk, offset)
             }
             // Something else?
@@ -103,7 +101,7 @@ mod tests {
             chunk.write_constant(crate::value::Value::new(i as f64), 123);
         }
         // chunk.write_constant(value::Value::new(1.2), 123);
-        chunk.write_op(OpCode::OpReturn, 123);
+        chunk.write_op(OpCode::Return, 123);
 
         let mut disassembler = Disassembler::new(std::io::sink());
         disassembler.disassemble_chunk(&chunk, "test chunk");

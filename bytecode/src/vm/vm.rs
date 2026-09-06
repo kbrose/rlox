@@ -65,7 +65,7 @@ impl VirtualMachine {
 
             let op = unsafe { chunk.op_unchecked_at_index_unchecked(post_increment(&mut ip)) };
             match op {
-                OpCode::OpConstantLong => {
+                OpCode::ConstantLong => {
                     let constant_idx = (chunk.byte_at_index(post_increment(&mut ip)) as usize)
                         | ((chunk.byte_at_index(post_increment(&mut ip)) as usize) << 8)
                         | ((chunk.byte_at_index(post_increment(&mut ip)) as usize) << 16);
@@ -73,7 +73,7 @@ impl VirtualMachine {
                     let constant = unsafe { chunk.constant_at_index_unchecked(constant_idx) };
                     self.stack.push(*constant);
                 }
-                OpCode::OpConstant => {
+                OpCode::Constant => {
                     let constant = unsafe {
                         chunk.constant_at_index_unchecked(
                             chunk.byte_at_index(post_increment(&mut ip)) as usize,
@@ -81,14 +81,14 @@ impl VirtualMachine {
                     };
                     self.stack.push(*constant);
                 }
-                OpCode::OpAdd => self.binary_op(|a, b| a + b),
-                OpCode::OpSubtract => self.binary_op(|a, b| a - b),
-                OpCode::OpMultiply => self.binary_op(|a, b| a * b),
-                OpCode::OpDivide => self.binary_op(|a, b| a / b),
-                OpCode::OpNegate => {
+                OpCode::Add => self.binary_op(|a, b| a + b),
+                OpCode::Subtract => self.binary_op(|a, b| a - b),
+                OpCode::Multiply => self.binary_op(|a, b| a * b),
+                OpCode::Divide => self.binary_op(|a, b| a / b),
+                OpCode::Negate => {
                     self.stack.apply_to_top(|value| -value);
                 }
-                OpCode::OpReturn => {
+                OpCode::Return => {
                     #[allow(unused)]
                     let out = self.stack.pop();
                     #[cfg(feature = "debug_trace_execution")]

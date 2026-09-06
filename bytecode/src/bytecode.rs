@@ -4,17 +4,17 @@ use crate::value::Value;
 #[repr(u8)]
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum OpCode {
-    OpConstantLong,
-    OpConstant,
-    OpAdd,
-    OpSubtract,
-    OpMultiply,
-    OpDivide,
-    OpNegate,
-    OpReturn,
+    ConstantLong,
+    Constant,
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Negate,
+    Return,
 }
 
-const LAST_OP_CODE: OpCode = OpCode::OpReturn;
+const LAST_OP_CODE: OpCode = OpCode::Return;
 
 #[allow(unused)]
 impl OpCode {
@@ -41,14 +41,14 @@ impl OpCode {
 
     pub(crate) fn dis_string(&self) -> String {
         match self {
-            Self::OpConstant => "OP_CONSTANT",
-            Self::OpReturn => "OP_RETURN",
-            Self::OpConstantLong => "OP_CONSTANT_LONG",
-            Self::OpNegate => "OP_NEGATE",
-            Self::OpAdd => "OP_ADD",
-            Self::OpSubtract => "OP_SUBTRACT",
-            Self::OpMultiply => "OP_MULTIPLY",
-            Self::OpDivide => "OP_DIVIDE",
+            Self::Constant => "OP_CONSTANT",
+            Self::Return => "OP_RETURN",
+            Self::ConstantLong => "OP_CONSTANT_LONG",
+            Self::Negate => "OP_NEGATE",
+            Self::Add => "OP_ADD",
+            Self::Subtract => "OP_SUBTRACT",
+            Self::Multiply => "OP_MULTIPLY",
+            Self::Divide => "OP_DIVIDE",
         }
         .to_string()
     }
@@ -195,10 +195,10 @@ impl Chunk {
     pub(crate) fn write_constant(&mut self, value: Value, line: usize) {
         let index = self.write_value_to_constants(value);
         if index <= 0xFF {
-            self.write_op(OpCode::OpConstant, line);
+            self.write_op(OpCode::Constant, line);
             self.write_byte(index as u8, line);
         } else {
-            self.write_op(OpCode::OpConstantLong, line);
+            self.write_op(OpCode::ConstantLong, line);
             self.write_byte((index & 0xFF) as u8, line);
             self.write_byte(((index >> 8) & 0xFF) as u8, line);
             self.write_byte(((index >> 16) & 0xFF) as u8, line);
@@ -320,12 +320,12 @@ mod tests {
         // First 256 constants should be just OpConstant
         for i in 0..=0xFF {
             chunk.write_constant(crate::value::Value::new(i as f64), 123);
-            assert!(chunk.code[chunk.code.len() - 2] == OpCode::OpConstant.to_byte());
+            assert!(chunk.code[chunk.code.len() - 2] == OpCode::Constant.to_byte());
         }
         // All other constants should be OpConstantLong
         for i in 0..=0xFF {
             chunk.write_constant(crate::value::Value::new(i as f64), 123);
-            assert!(chunk.code[chunk.code.len() - 4] == OpCode::OpConstantLong.to_byte());
+            assert!(chunk.code[chunk.code.len() - 4] == OpCode::ConstantLong.to_byte());
         }
     }
 }

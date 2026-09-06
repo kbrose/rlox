@@ -1,7 +1,7 @@
 use crate::scanner::{Scanner, TokenType};
 
 pub(crate) fn compile(source: &str) {
-    let mut scanner = Scanner::new(source);
+    let mut scanner = Scanner::new(source, std::io::stderr());
 
     let mut line = 0;
     loop {
