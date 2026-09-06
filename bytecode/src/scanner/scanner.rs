@@ -673,7 +673,7 @@ mod tests {
         let mut tokens = vec![];
         loop {
             let token = scanner.scan_token()?;
-            let is_eof = token.token_type == TokenType::Eof;
+            let is_eof = token.token_type() == TokenType::Eof;
             tokens.push(token);
             if is_eof {
                 break;
@@ -943,91 +943,23 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                Token {
-                    token_type: TokenType::LeftParen,
-                    line: 2,
-                    lexeme: "(",
-                },
-                Token {
-                    token_type: TokenType::LeftParen,
-                    line: 2,
-                    lexeme: "(",
-                },
-                Token {
-                    token_type: TokenType::RightParen,
-                    line: 2,
-                    lexeme: ")",
-                },
-                Token {
-                    token_type: TokenType::RightParen,
-                    line: 2,
-                    lexeme: ")",
-                },
-                Token {
-                    token_type: TokenType::LeftBrace,
-                    line: 2,
-                    lexeme: "{",
-                },
-                Token {
-                    token_type: TokenType::RightBrace,
-                    line: 2,
-                    lexeme: "}",
-                },
-                Token {
-                    token_type: TokenType::Bang,
-                    line: 3,
-                    lexeme: "!",
-                },
-                Token {
-                    token_type: TokenType::Star,
-                    line: 3,
-                    lexeme: "*",
-                },
-                Token {
-                    token_type: TokenType::Plus,
-                    line: 3,
-                    lexeme: "+",
-                },
-                Token {
-                    token_type: TokenType::Minus,
-                    line: 3,
-                    lexeme: "-",
-                },
-                Token {
-                    token_type: TokenType::Slash,
-                    line: 3,
-                    lexeme: "/",
-                },
-                Token {
-                    token_type: TokenType::Equal,
-                    line: 3,
-                    lexeme: "=",
-                },
-                Token {
-                    token_type: TokenType::Less,
-                    line: 3,
-                    lexeme: "<",
-                },
-                Token {
-                    token_type: TokenType::Greater,
-                    line: 3,
-                    lexeme: ">",
-                },
-                Token {
-                    token_type: TokenType::LessEqual,
-                    line: 3,
-                    lexeme: "<=",
-                },
-                Token {
-                    token_type: TokenType::EqualEqual,
-                    line: 3,
-                    lexeme: "==",
-                },
-                Token {
-                    token_type: TokenType::Eof,
-                    line: 5,
-                    lexeme: "",
-                },
+                TokenType::LeftParen.to_token(2, "(",),
+                TokenType::LeftParen.to_token(2, "(",),
+                TokenType::RightParen.to_token(2, ")",),
+                TokenType::RightParen.to_token(2, ")",),
+                TokenType::LeftBrace.to_token(2, "{",),
+                TokenType::RightBrace.to_token(2, "}",),
+                TokenType::Bang.to_token(3, "!",),
+                TokenType::Star.to_token(3, "*",),
+                TokenType::Plus.to_token(3, "+",),
+                TokenType::Minus.to_token(3, "-",),
+                TokenType::Slash.to_token(3, "/",),
+                TokenType::Equal.to_token(3, "=",),
+                TokenType::Less.to_token(3, "<",),
+                TokenType::Greater.to_token(3, ">",),
+                TokenType::LessEqual.to_token(3, "<=",),
+                TokenType::EqualEqual.to_token(3, "==",),
+                TokenType::Eof.to_token(5, "",),
             ]
         )
     }

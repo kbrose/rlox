@@ -67,13 +67,24 @@ impl TokenType {
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct Token<'a> {
-    pub(crate) token_type: TokenType,
-    pub(crate) line: u32,
-    pub(crate) lexeme: &'a str,
+    token_type: TokenType,
+    line: u32,
+    lexeme: &'a str,
 }
 
 impl<'a> Token<'a> {
-    fn line(&self) -> u32 {
+    #[inline]
+    pub(crate) fn token_type(&self) -> TokenType {
+        self.token_type
+    }
+
+    #[inline]
+    pub(crate) fn line(&self) -> u32 {
         self.line
+    }
+
+    #[inline]
+    pub(crate) fn lexeme(&self) -> &'a str {
+        self.lexeme
     }
 }

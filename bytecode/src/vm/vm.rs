@@ -26,8 +26,6 @@ impl VirtualMachine {
         }
     }
 
-    pub(crate) fn free(&mut self) {}
-
     pub(crate) fn interpret(&mut self, source: String) -> InterpretResult {
         compile(&source);
         InterpretResult::InterpretOk
