@@ -2,11 +2,12 @@ use crate::scanner::token::{Token, TokenType};
 // use anyhow::{Result, anyhow};
 use std::collections::HashMap;
 use std::fmt;
+use std::io::Write;
 use std::sync::LazyLock;
 
 #[derive(Debug)]
 struct ScanError {
-    line: usize,
+    line: u32,
     message: String,
 }
 
@@ -43,7 +44,7 @@ struct StateMachineError {
 }
 
 impl StateMachineError {
-    fn to_scan_error(self, line: usize) -> ScanError {
+    fn to_scan_error(self, line: u32) -> ScanError {
         ScanError {
             line,
             message: self.message,
@@ -67,18 +68,34 @@ enum StateMachine {
     InsideBlockCommentSawStar(BlockCommentNesting),
     InsideBlockCommentSawSlash(BlockCommentNesting),
     InsideString(LexemeStart),
-    NumberBeforeDecimal(LexemeStart),
-    NumberWithDecimal(LexemeStart),
+    InsideNumber(LexemeStart, NumberState),
     InsideIdentifier(LexemeStart),
 }
 
-type StateMachineResult<'a> = Result<([Option<Token<'a>>; 2], StateMachine), StateMachineError>;
+#[derive(Clone, Copy)]
+enum NumberState {
+    BeforeDecimal,
+    JustSawDecimal,
+    AfterDecimalSawNumber,
+}
+
+enum TokenOutput<'a> {
+    Zero,
+    One(Token<'a>),
+    Two((Token<'a>, Token<'a>)),
+    // Handling numbers can result in 3 tokens completing at once. It only happens in an error
+    // (trailing dot after number), but this matches the book implementation the closest.
+    // Without this, we could reduce to just 0/1/2.
+    Three((Token<'a>, Token<'a>, Token<'a>)),
+}
+
+type StateMachineResult<'a> = Result<(TokenOutput<'a>, StateMachine), StateMachineError>;
 
 struct ProcessInput<'a> {
     char: char,
     char_start: usize,
     char_end: usize,
-    line: usize,
+    line: u32,
     source: &'a str,
 }
 
@@ -91,8 +108,16 @@ impl StateMachine {
         use StateMachine::*;
 
         match self {
-            Root => Self::process_top_level(process_input)
-                .map(|(t, next_state)| ([t, None], next_state)),
+            Root => Self::process_top_level(process_input).map(|(maybe_token, next_state)| {
+                (
+                    if let Some(token) = maybe_token {
+                        TokenOutput::One(token)
+                    } else {
+                        TokenOutput::Zero
+                    },
+                    next_state,
+                )
+            }),
             Bang(lexeme_start) => Self::process_look_for_equal(
                 process_input,
                 *lexeme_start,
@@ -118,27 +143,25 @@ impl StateMachine {
                 TokenType::Greater,
             ),
             Slash(lexeme_start) => Self::process_slash(process_input, *lexeme_start),
-            InsideSingleLineComment => {
-                Ok(([None, None], Self::process_line_comment(process_input.char)))
-            }
+            InsideSingleLineComment => Ok((
+                TokenOutput::Zero,
+                Self::process_line_comment(process_input.char),
+            )),
             InsideBlockComment(BlockCommentNesting(n)) => Ok((
-                [None, None],
+                TokenOutput::Zero,
                 Self::process_block_comment(process_input.char, *n, false, false),
             )),
             InsideBlockCommentSawStar(BlockCommentNesting(n)) => Ok((
-                [None, None],
+                TokenOutput::Zero,
                 Self::process_block_comment(process_input.char, *n, true, false),
             )),
             InsideBlockCommentSawSlash(BlockCommentNesting(n)) => Ok((
-                [None, None],
+                TokenOutput::Zero,
                 Self::process_block_comment(process_input.char, *n, false, true),
             )),
             InsideString(lexeme_start) => Self::process_string(process_input, *lexeme_start),
-            NumberBeforeDecimal(lexeme_start) => {
-                Self::process_number(process_input, *lexeme_start, false)
-            }
-            NumberWithDecimal(lexeme_start) => {
-                Self::process_number(process_input, *lexeme_start, true)
+            InsideNumber(lexeme_start, state) => {
+                Self::process_number(process_input, *lexeme_start, *state)
             }
             Self::InsideIdentifier(lexeme_start) => {
                 Self::process_identifier(process_input, *lexeme_start)
@@ -253,7 +276,10 @@ impl StateMachine {
             // Number literals
             '0'..='9' => Ok((
                 None,
-                StateMachine::NumberBeforeDecimal(LexemeStart(process_input.char_start)),
+                StateMachine::InsideNumber(
+                    LexemeStart(process_input.char_start),
+                    NumberState::BeforeDecimal,
+                ),
             )),
             // Identifiers
             'a'..='z' | 'A'..='Z' | '_' => Ok((
@@ -270,28 +296,30 @@ impl StateMachine {
     fn process_look_for_equal<'a>(
         process_input: ProcessInput<'a>,
         lexeme_start: LexemeStart,
-        if_equal: TokenType<'a>,
-        otherwise: TokenType<'a>,
+        if_equal: TokenType,
+        otherwise: TokenType,
     ) -> StateMachineResult<'a> {
         if process_input.char == '=' {
             Ok((
-                [
-                    Some(if_equal.to_token(
-                        process_input.line,
-                        &process_input.source[lexeme_start.0..process_input.char_end],
-                    )),
-                    None,
-                ],
+                TokenOutput::One(if_equal.to_token(
+                    process_input.line,
+                    &process_input.source[lexeme_start.0..process_input.char_end],
+                )),
                 StateMachine::Root,
             ))
         } else {
             let line = process_input.line;
             let slice = &process_input.source[lexeme_start.0..process_input.char_start];
+            let otherwise = otherwise.to_token(line, slice);
+
             let (maybe_token, next_state) = Self::process_top_level(process_input)?;
-            Ok((
-                [Some(otherwise.to_token(line, slice)), maybe_token],
-                next_state,
-            ))
+            let token_output = if let Some(next_token) = maybe_token {
+                TokenOutput::Two((otherwise, next_token))
+            } else {
+                TokenOutput::One(otherwise)
+            };
+
+            Ok((token_output, next_state))
         }
     }
 
@@ -300,9 +328,9 @@ impl StateMachine {
         lexeme_start: LexemeStart,
     ) -> StateMachineResult<'a> {
         match process_input.char {
-            '/' => Ok(([None, None], StateMachine::InsideSingleLineComment)),
+            '/' => Ok((TokenOutput::Zero, StateMachine::InsideSingleLineComment)),
             '*' => Ok((
-                [None, None],
+                TokenOutput::Zero,
                 StateMachine::InsideBlockComment(BlockCommentNesting(0)),
             )),
             _ => {
@@ -310,8 +338,15 @@ impl StateMachine {
                     process_input.line,
                     &process_input.source[lexeme_start.0..process_input.char_start],
                 );
+
                 let (maybe_token, next_state) = Self::process_top_level(process_input)?;
-                Ok(([Some(slash_token), maybe_token], next_state))
+                let token_output = if let Some(next_token) = maybe_token {
+                    TokenOutput::Two((slash_token, next_token))
+                } else {
+                    TokenOutput::One(slash_token)
+                };
+
+                Ok((token_output, next_state))
             }
         }
     }
@@ -352,48 +387,76 @@ impl StateMachine {
         lexeme_start: LexemeStart,
     ) -> StateMachineResult<'a> {
         if process_input.char == '"' {
-            let string_slice = &process_input.source[lexeme_start.0 + 1..process_input.char_start];
             let lexeme_slice = &process_input.source[lexeme_start.0..process_input.char_end];
             Ok((
-                [
-                    Some(
-                        TokenType::String(string_slice).to_token(process_input.line, lexeme_slice),
-                    ),
-                    None,
-                ],
+                TokenOutput::One(TokenType::String.to_token(process_input.line, lexeme_slice)),
                 StateMachine::Root,
             ))
         } else {
-            Ok(([None, None], StateMachine::InsideString(lexeme_start)))
+            Ok((TokenOutput::Zero, StateMachine::InsideString(lexeme_start)))
         }
     }
 
     fn process_number<'a>(
         process_input: ProcessInput<'a>,
         lexeme_start: LexemeStart,
-        has_seen_decimal: bool,
+        state: NumberState,
     ) -> StateMachineResult<'a> {
-        match (process_input.char, has_seen_decimal) {
-            (('0'..='9'), true) => {
-                Ok(([None, None], StateMachine::NumberWithDecimal(lexeme_start)))
+        match (process_input.char, state) {
+            (('0'..='9'), NumberState::JustSawDecimal | NumberState::AfterDecimalSawNumber) => {
+                Ok((
+                    TokenOutput::Zero,
+                    StateMachine::InsideNumber(lexeme_start, NumberState::AfterDecimalSawNumber),
+                ))
             }
-            (('0'..='9'), false) => Ok((
-                [None, None],
-                StateMachine::NumberBeforeDecimal(lexeme_start),
+            (('0'..='9'), NumberState::BeforeDecimal) => Ok((
+                TokenOutput::Zero,
+                StateMachine::InsideNumber(lexeme_start, NumberState::BeforeDecimal),
             )),
-            ('.', false) => Ok(([None, None], StateMachine::NumberWithDecimal(lexeme_start))),
+            ('.', NumberState::BeforeDecimal) => Ok((
+                TokenOutput::Zero,
+                StateMachine::InsideNumber(lexeme_start, NumberState::JustSawDecimal),
+            )),
+            (_, NumberState::JustSawDecimal) => {
+                // NOTE: The number str only goes to .char_start - 1. In general, doing arithmetic
+                // on byte locations is not valid with UTF-8 strings. However, because we are in
+                // JustSawDecimal, we know the previous character was '.' which is one byte long,
+                // _and_ we do not want to include it in the number lexeme.
+                // Also note: we do actually know that this is invalid syntax at this point in time,
+                // but the author wanted to "leave open" the possibility of supporting method
+                // syntax on numbers (like 1.sqrt()) which requires us emitting a Dot here.
+                let number_str =
+                    &process_input.source[lexeme_start.0..process_input.char_start - 1];
+                let number_token = TokenType::Number.to_token(process_input.line, number_str);
+                let dot_token = TokenType::Dot.to_token(
+                    process_input.line,
+                    &process_input.source[process_input.char_start - 1..process_input.char_start],
+                );
+                let (maybe_token, next_state) = Self::process_top_level(process_input)?;
+
+                let token_output = if let Some(next_next_token) = maybe_token {
+                    TokenOutput::Three((number_token, dot_token, next_next_token))
+                } else {
+                    TokenOutput::Two((number_token, dot_token))
+                };
+
+                Ok((token_output, next_state))
+            }
             _ => {
-                // Handle the case of (1) observing a '.' when we've already seen one, and
-                // (2) observing any other non-number character.
+                // In this case, we need to complete parsing the number and then scan the current
+                // character.
                 let number_str = &process_input.source[lexeme_start.0..process_input.char_start];
-                let number_token =
-                    TokenType::Number(number_str.parse().map_err(|_| StateMachineError {
-                        message: format!("Unable to parse number from {number_str}"),
-                    })?)
-                    .to_token(process_input.line, number_str);
+                let number_token = TokenType::Number.to_token(process_input.line, number_str);
 
                 let (maybe_token, next_state) = Self::process_top_level(process_input)?;
-                Ok(([Some(number_token), maybe_token], next_state))
+
+                let token_output = if let Some(next_token) = maybe_token {
+                    TokenOutput::Two((number_token, next_token))
+                } else {
+                    TokenOutput::One(number_token)
+                };
+
+                Ok((token_output, next_state))
             }
         }
     }
@@ -403,9 +466,10 @@ impl StateMachine {
         lexeme_start: LexemeStart,
     ) -> StateMachineResult<'a> {
         match process_input.char {
-            'a'..='z' | 'A'..='Z' | '_' | '0'..='9' => {
-                Ok(([None, None], StateMachine::InsideIdentifier(lexeme_start)))
-            }
+            'a'..='z' | 'A'..='Z' | '_' | '0'..='9' => Ok((
+                TokenOutput::Zero,
+                StateMachine::InsideIdentifier(lexeme_start),
+            )),
             _ => {
                 let lexeme = &process_input.source[lexeme_start.0..process_input.char_start];
                 let token_type = match KEYWORD_MAP.get(lexeme) {
@@ -413,8 +477,15 @@ impl StateMachine {
                     None => TokenType::Identifier,
                 };
                 let token = token_type.to_token(process_input.line, lexeme);
+
                 let (maybe_token, next_state) = Self::process_top_level(process_input)?;
-                Ok(([Some(token), maybe_token], next_state))
+                let token_output = if let Some(next_token) = maybe_token {
+                    TokenOutput::Two((token, next_token))
+                } else {
+                    TokenOutput::One(token)
+                };
+
+                Ok((token_output, next_state))
             }
         }
     }
@@ -422,42 +493,27 @@ impl StateMachine {
     fn terminate_scanning<'a>(
         self: &Self,
         source: &'a str,
-        line: usize,
+        line: u32,
     ) -> (Option<Token<'a>>, Option<StateMachineError>) {
         match self {
             // It's "ok" to end scanning in these states. (Most will cause issues downstream.)
-            StateMachine::Root
-            | StateMachine::Bang(_)
-            | StateMachine::Equal(_)
-            | StateMachine::Less(_)
-            | StateMachine::Greater(_)
-            | StateMachine::Slash(_)
-            | StateMachine::InsideSingleLineComment
-            | StateMachine::InsideBlockComment(_)
-            | StateMachine::InsideBlockCommentSawStar(_)
-            | StateMachine::InsideBlockCommentSawSlash(_) => (None, None),
+            Self::Root
+            | Self::Bang(_)
+            | Self::Equal(_)
+            | Self::Less(_)
+            | Self::Greater(_)
+            | Self::Slash(_)
+            | Self::InsideSingleLineComment
+            | Self::InsideBlockComment(_)
+            | Self::InsideBlockCommentSawStar(_)
+            | Self::InsideBlockCommentSawSlash(_) => (None, None),
             // Ending scanning in these states requires some final clean up
-            Self::NumberBeforeDecimal(lexeme_start) | Self::NumberWithDecimal(lexeme_start) => {
+            Self::InsideNumber(
+                lexeme_start,
+                NumberState::BeforeDecimal | NumberState::AfterDecimalSawNumber,
+            ) => {
                 let number_str = &source[lexeme_start.0..];
-                if number_str.ends_with('.') {
-                    (
-                        None,
-                        Some(StateMachineError {
-                            message: format!("Numbers cannot end with trailing '.': {number_str}"),
-                        }),
-                    )
-                } else {
-                    let maybe_number = number_str.parse().map_err(|_| StateMachineError {
-                        message: format!("Unable to parse number from {number_str}"),
-                    });
-                    match maybe_number {
-                        Ok(number) => {
-                            let token = TokenType::Number(number).to_token(line, number_str);
-                            (Some(token), None)
-                        }
-                        Err(e) => (None, Some(e)),
-                    }
-                }
+                (Some(TokenType::Number.to_token(line, number_str)), None)
             }
             Self::InsideIdentifier(lexeme_start) => {
                 let lexeme = &source[lexeme_start.0..];
@@ -476,98 +532,132 @@ impl StateMachine {
                     message: "Unterminated string.".to_string(),
                 }),
             ),
+            &StateMachine::InsideNumber(lexeme_start, NumberState::JustSawDecimal) => {
+                let number_str = &source[lexeme_start.0..];
+                (
+                    Some(TokenType::Number.to_token(line, number_str)),
+                    Some(StateMachineError {
+                        message: format!("Numbers must not have trailing decimal: {number_str}"),
+                    }),
+                )
+            }
         }
     }
 }
 
-pub(crate) struct Scanner<'a> {
+pub(crate) struct Scanner<'a, W: Write> {
     source: &'a str,
     state: StateMachine,
-    line: usize,
+    line: u32,
     chars: std::str::CharIndices<'a>,
-    next_result: Option<(Token<'a>, Option<Token<'a>>)>,
+    scan_results_queue: ScanResultsQueue<'a>,
+    error_writer: W,
 }
 
-impl<'a> Scanner<'a> {
-    pub(crate) fn new(source: &'a str) -> Scanner<'a> {
+#[derive(Clone, Copy)]
+enum ScanResultsQueue<'a> {
+    Zero,
+    One(Token<'a>),
+    // This matches the Three variant of the TokenOutput: it only occurs
+    // when we know there's an error, but we keep it around to more closely match
+    // clox behavior.
+    Two((Token<'a>, Token<'a>)),
+}
+
+impl<'a, W: Write> Scanner<'a, W> {
+    pub(crate) fn new(source: &'a str, error_writer: W) -> Scanner<'a, W> {
         Scanner {
             source,
             state: StateMachine::new(),
             line: 1, // 1-indexed line numbers
             chars: source.char_indices(),
-            next_result: None,
+            scan_results_queue: ScanResultsQueue::Zero,
+            error_writer,
         }
     }
 
-    pub(crate) fn scan_token(&mut self) -> Result<Token<'a>, ()> {
-        let maybe_next_result = self.next_result.clone();
-        if let Some((result, maybe_next_result)) = maybe_next_result {
-            self.next_result = if let Some(next_result) = maybe_next_result {
-                Some((next_result, None))
-            } else {
-                None
-            };
-            Ok(result)
-        } else {
-            loop {
-                match self.chars.next() {
-                    Some((char_start, char)) => {
-                        if char == '\n' {
-                            self.line += 1;
-                        }
+    fn error(&mut self, error: StateMachineError) {
+        writeln!(self.error_writer, "{}", error.to_scan_error(self.line)).expect("Error writing.")
+    }
 
-                        let process_results = self.state.process(ProcessInput {
-                            char,
-                            char_start,
-                            char_end: self.source.ceil_char_boundary(char_start + 1),
-                            line: self.line,
-                            source: self.source,
-                        });
-                        match process_results {
-                            Ok((maybe_tokens, new_state)) => {
-                                self.state = new_state;
-                                match maybe_tokens {
-                                    [None, None] => {}
-                                    [None, Some(token)] => break Ok(token),
-                                    [Some(token), None] => break Ok(token),
-                                    [Some(token1), Some(token2)] => {
-                                        self.next_result = Some((token2, None));
-                                        break Ok(token1);
+    pub(crate) fn scan_token(&mut self) -> Result<Token<'a>, ()> {
+        match self.scan_results_queue {
+            ScanResultsQueue::Two((token1, token2)) => {
+                self.scan_results_queue = ScanResultsQueue::One(token2);
+                Ok(token1)
+            }
+            ScanResultsQueue::One(token) => {
+                self.scan_results_queue = ScanResultsQueue::Zero;
+                Ok(token)
+            }
+            ScanResultsQueue::Zero => {
+                loop {
+                    match self.chars.next() {
+                        Some((char_start, char)) => {
+                            if char == '\n' {
+                                self.line += 1;
+                            }
+
+                            let process_results = self.state.process(ProcessInput {
+                                char,
+                                char_start,
+                                // char_end points to the next boundary index. Note that this means
+                                // we need to get ceil_char_boundary of the _next_ byte, since we know
+                                // char_start already points to a boundary.
+                                char_end: self.source.ceil_char_boundary(char_start + 1),
+                                line: self.line,
+                                source: self.source,
+                            });
+                            match process_results {
+                                Ok((maybe_tokens, new_state)) => {
+                                    self.state = new_state;
+                                    match maybe_tokens {
+                                        TokenOutput::Zero => {}
+                                        TokenOutput::One(token) => break Ok(token),
+                                        TokenOutput::Two((token1, token2)) => {
+                                            self.scan_results_queue = ScanResultsQueue::One(token2);
+                                            break Ok(token1);
+                                        }
+                                        TokenOutput::Three((token1, token2, token3)) => {
+                                            self.scan_results_queue =
+                                                ScanResultsQueue::Two((token2, token3));
+                                            break Ok(token1);
+                                        }
                                     }
                                 }
-                            }
-                            Err(e) => {
-                                self.state = StateMachine::new();
-                                eprintln!("{}", e.to_scan_error(self.line));
-                                break Err(());
+                                Err(e) => {
+                                    self.state = StateMachine::new();
+                                    self.error(e);
+                                    break Err(());
+                                }
                             }
                         }
-                    }
-                    None => {
-                        // Finished iterating through source code, need to perform final clean up.
+                        None => {
+                            // Finished iterating through source code, need to perform final clean up.
 
-                        let (maybe_token, maybe_error) =
-                            self.state.terminate_scanning(self.source, self.line);
+                            let (maybe_token, maybe_error) =
+                                self.state.terminate_scanning(self.source, self.line);
 
-                        let eof = TokenType::Eof.to_token(self.line, &self.source[0..0]);
+                            let eof = TokenType::Eof.to_token(self.line, &self.source[0..0]);
 
-                        match (maybe_token, maybe_error) {
-                            (None, None) => {
-                                break Ok(eof);
-                            }
-                            (None, Some(e)) => {
-                                self.next_result = Some((eof, None));
-                                eprintln!("{}", e.to_scan_error(self.line));
-                                break Err(());
-                            }
-                            (Some(token), None) => {
-                                self.next_result = Some((eof, None));
-                                break Ok(token);
-                            }
-                            (Some(token), Some(e)) => {
-                                self.next_result = Some((token, Some(eof)));
-                                eprintln!("{}", e.to_scan_error(self.line));
-                                break Err(());
+                            match (maybe_token, maybe_error) {
+                                (None, None) => {
+                                    break Ok(eof);
+                                }
+                                (None, Some(e)) => {
+                                    self.scan_results_queue = ScanResultsQueue::One(eof);
+                                    self.error(e);
+                                    break Err(());
+                                }
+                                (Some(token), None) => {
+                                    self.scan_results_queue = ScanResultsQueue::One(eof);
+                                    break Ok(token);
+                                }
+                                (Some(token), Some(e)) => {
+                                    self.scan_results_queue = ScanResultsQueue::Two((token, eof));
+                                    self.error(e);
+                                    break Err(());
+                                }
                             }
                         }
                     }
@@ -584,7 +674,7 @@ mod tests {
     const EOF_LINE_1: Token<'static> = TokenType::Eof.to_token(1, "");
 
     fn scan_to_completion<'a>(source: &'a str) -> Result<Vec<Token<'a>>, ()> {
-        let mut scanner = Scanner::new(source);
+        let mut scanner = Scanner::new(source, std::io::sink());
         let mut tokens = vec![];
         loop {
             let token = scanner.scan_token()?;
@@ -600,7 +690,7 @@ mod tests {
     #[test]
     fn test_scans_one_token_at_a_time() {
         let source = "(\n)";
-        let mut scanner = Scanner::new(source);
+        let mut scanner = Scanner::new(source, std::io::sink());
 
         assert_eq!(
             scanner.scan_token(),
@@ -615,13 +705,17 @@ mod tests {
     #[test]
     fn test_scan_error_does_not_block_rest() {
         let source = "1.";
-        let mut scanner = Scanner::new(source);
+        let mut scanner = Scanner::new(source, std::io::sink());
         assert_eq!(scanner.scan_token(), Err(()));
+        assert_eq!(
+            scanner.scan_token(),
+            Ok(TokenType::Number.to_token(1, "1."))
+        );
         assert_eq!(scanner.scan_token(), Ok(EOF_LINE_1));
 
         // Lox only supports ascii identifiers.
         let source = "print ß;";
-        let mut scanner = Scanner::new(source);
+        let mut scanner = Scanner::new(source, std::io::sink());
         assert_eq!(
             scanner.scan_token(),
             Ok(TokenType::Print.to_token(1, "print"))
@@ -691,9 +785,23 @@ mod tests {
         assert_eq!(
             tokens,
             vec![
-                TokenType::Number(123.0).to_token(1, "123"),
-                TokenType::Number(456.0).to_token(1, "456"),
-                TokenType::Number(0.5).to_token(1, "0.5"),
+                TokenType::Number.to_token(1, "123"),
+                TokenType::Number.to_token(1, "456"),
+                TokenType::Number.to_token(1, "0.5"),
+                EOF_LINE_1
+            ]
+        )
+    }
+
+    #[test]
+    fn test_number_trailing_dot() {
+        let tokens = scan_to_completion("123.x").unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                TokenType::Number.to_token(1, "123"),
+                TokenType::Dot.to_token(1, "."),
+                TokenType::Identifier.to_token(1, "x"),
                 EOF_LINE_1
             ]
         )
@@ -702,15 +810,12 @@ mod tests {
     #[test]
     fn test_numbers_at_eof() {
         let tokens = scan_to_completion("9").unwrap();
-        assert_eq!(
-            tokens,
-            vec![TokenType::Number(9.0).to_token(1, "9"), EOF_LINE_1]
-        );
+        assert_eq!(tokens, vec![TokenType::Number.to_token(1, "9"), EOF_LINE_1]);
 
         let tokens = scan_to_completion("9.0").unwrap();
         assert_eq!(
             tokens,
-            vec![TokenType::Number(9.0).to_token(1, "9.0"), EOF_LINE_1]
+            vec![TokenType::Number.to_token(1, "9.0"), EOF_LINE_1]
         );
 
         assert!(scan_to_completion("9.").is_err());
@@ -721,10 +826,19 @@ mod tests {
         let s = "\"Hello, World!\"";
         let tokens = scan_to_completion(s).unwrap();
 
+        assert_eq!(tokens, vec![TokenType::String.to_token(1, s), EOF_LINE_1]);
+    }
+
+    #[test]
+    fn test_print_string() {
+        let s = "print \"Hello, World!\"";
+        let tokens = scan_to_completion(s).unwrap();
+
         assert_eq!(
             tokens,
             vec![
-                TokenType::String("Hello, World!").to_token(1, s),
+                TokenType::Print.to_token(1, "print"),
+                TokenType::String.to_token(1, "\"Hello, World!\""),
                 EOF_LINE_1
             ]
         );
@@ -738,13 +852,7 @@ mod tests {
         let s = "\"Hello, µWorld!\"";
         let tokens = scan_to_completion(s).unwrap();
 
-        assert_eq!(
-            tokens,
-            vec![
-                TokenType::String("Hello, µWorld!").to_token(1, s),
-                EOF_LINE_1
-            ]
-        );
+        assert_eq!(tokens, vec![TokenType::String.to_token(1, s), EOF_LINE_1]);
     }
 
     #[test]
