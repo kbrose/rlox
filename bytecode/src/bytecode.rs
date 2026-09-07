@@ -41,14 +41,14 @@ impl OpCode {
 
     pub(crate) fn dis_string(&self) -> String {
         match self {
-            Self::Constant => "OP_CONSTANT",
-            Self::Return => "OP_RETURN",
-            Self::ConstantLong => "OP_CONSTANT_LONG",
-            Self::Negate => "OP_NEGATE",
-            Self::Add => "OP_ADD",
-            Self::Subtract => "OP_SUBTRACT",
-            Self::Multiply => "OP_MULTIPLY",
-            Self::Divide => "OP_DIVIDE",
+            Self::Constant => "CONSTANT",
+            Self::Return => "RETURN",
+            Self::ConstantLong => "CONSTANT_LONG",
+            Self::Negate => "NEGATE",
+            Self::Add => "ADD",
+            Self::Subtract => "SUBTRACT",
+            Self::Multiply => "MULTIPLY",
+            Self::Divide => "DIVIDE",
         }
         .to_string()
     }

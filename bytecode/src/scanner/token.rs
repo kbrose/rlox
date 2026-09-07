@@ -1,3 +1,4 @@
+#[repr(u8)]
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) enum TokenType {
     // Single-character tokens.
@@ -45,7 +46,7 @@ pub(crate) enum TokenType {
     True,
     Var,
     While,
-    Break,
+    // Break,
 
     // End of file
     Eof,
@@ -58,10 +59,6 @@ impl TokenType {
             line,
             lexeme,
         }
-    }
-
-    pub(crate) fn to_debug_num(&self) -> u8 {
-        *self as u8
     }
 }
 

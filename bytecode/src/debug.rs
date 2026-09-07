@@ -19,6 +19,7 @@ impl<W: Write> Disassembler<W> {
 
     pub(crate) fn disassemble_chunk(&mut self, chunk: &Chunk, name: &str) {
         writeln!(self.writer, "== {} ==", name).unwrap();
+        writeln!(self.writer, "offs line op            cidx cval").unwrap();
 
         let mut offset = 0;
         while offset < chunk.count() {
@@ -67,7 +68,7 @@ impl<W: Write> Disassembler<W> {
 
     fn constant_instruction(&mut self, name: &str, chunk: &Chunk, offset: usize) -> usize {
         let constant_idx = chunk.byte_at_index(offset + 1);
-        write!(self.writer, "{:<16} {:4} ", name, constant_idx).unwrap();
+        write!(self.writer, "{:<14} {:4} ", name, constant_idx).unwrap();
         chunk.constant_at_index(constant_idx as usize).print();
         writeln!(self.writer).unwrap();
         offset + 2
@@ -78,7 +79,7 @@ impl<W: Write> Disassembler<W> {
             | ((chunk.byte_at_index(offset + 2) as usize) << 8)
             | ((chunk.byte_at_index(offset + 3) as usize) << 16);
 
-        write!(self.writer, "{:<16} {:4} ", name, constant_idx).unwrap();
+        write!(self.writer, "{:<14} {:4} ", name, constant_idx).unwrap();
         chunk.constant_at_index(constant_idx).print();
         writeln!(self.writer).unwrap();
         offset + 4

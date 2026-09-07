@@ -27,9 +27,11 @@ impl VirtualMachine {
     }
 
     pub(crate) fn interpret(&mut self, source: String) -> InterpretResult {
-        compile(&source);
-        InterpretResult::InterpretOk
-        // self.run(chunk)
+        let mut chunk = Chunk::new();
+        match compile(&source, &mut chunk) {
+            Ok(()) => self.run(chunk),
+            Err(()) => InterpretResult::InterpretCompileError,
+        }
     }
 
     #[inline]
@@ -40,6 +42,9 @@ impl VirtualMachine {
 
     fn run(&mut self, chunk: Chunk) -> InterpretResult {
         let mut ip = 0;
+        if chunk.code.len() == 0 {
+            return InterpretResult::InterpretOk;
+        }
 
         #[cfg(feature = "debug_trace_execution")]
         let mut disassembler = {
@@ -52,7 +57,7 @@ impl VirtualMachine {
             #[cfg(feature = "debug_trace_execution")]
             {
                 print!("          ");
-                for value in self.stack.iter() {
+                for value in self.stack.stack().iter() {
                     print!("[ ");
                     value.print();
                     print!(" ]");

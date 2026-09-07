@@ -11,10 +11,7 @@ use std::{
     process::ExitCode,
 };
 
-use bytecode::*;
 use vm::*;
-
-use crate::value::Value;
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -24,7 +21,7 @@ fn main() -> ExitCode {
     } else if args.len() == 0 {
         repl()
     } else {
-        writeln!(io::stderr(), "Usage: clox [path]\n");
+        writeln!(io::stderr(), "Usage: clox [path]\n").expect("Error writing to stderr");
         ExitCode::FAILURE
     }
 }

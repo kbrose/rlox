@@ -7,10 +7,12 @@ edition = "2024"
 
 [features]
 default = []
-# default = ["debug_trace_execution"]
+# default = ["print_code", "debug_trace_execution", "timings", "unsafe_stack"]
 
+# These are my own features
 timings = []
-
-debug_trace_execution = []
-
 unsafe_stack = []
+
+# These are somewhat faithful reproductions of clox's feature flags
+debug_trace_execution = []
+print_code = []

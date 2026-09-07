@@ -27,6 +27,7 @@ impl Stack {
         self.stack[idx] = f(self.stack[idx]);
     }
 
+    #[cfg(feature = "debug_trace_execution")]
     pub(super) fn stack(&self) -> &Vec<Value> {
         &self.stack
     }
@@ -80,7 +81,16 @@ impl Stack {
         }
     }
 
-    pub(super) fn stack(&self) -> &Vec<Value> {
-        todo!()
+    #[cfg(feature = "debug_trace_execution")]
+    pub(super) fn stack(&mut self) -> &Vec<Value> {
+        unsafe {
+            // SAFETY: Assumes all other functions have upheld their invariants:
+            // namely that the start of self._storage is less than or equal to self.stack_top,
+            // and that the elements in between have all been initialized / are valid.
+            let new_len = self.stack_top.offset_from(self._storage.as_ptr());
+            assert!(new_len >= 0);
+            self._storage.set_len(new_len as usize);
+        }
+        &self._storage
     }
 }

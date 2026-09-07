@@ -440,7 +440,7 @@ impl StateMachine {
     fn keyword_or_identifier(lexeme: &str) -> TokenType {
         match lexeme {
             "and" => TokenType::And,
-            "break" => TokenType::Break,
+            // "break" => TokenType::Break,
             "class" => TokenType::Class,
             "else" => TokenType::Else,
             "false" => TokenType::False,
@@ -589,6 +589,9 @@ impl<'a, W: Write> Scanner<'a, W> {
                 loop {
                     match self.chars.next() {
                         Some((char_start, char)) => {
+                            // The newline may terminate a token, and we want to set that token's
+                            // line number to the number _before_ taking that newline into account.
+                            let line = self.line;
                             if char == '\n' {
                                 self.line += 1;
                             }
@@ -600,7 +603,7 @@ impl<'a, W: Write> Scanner<'a, W> {
                                 // we need to get ceil_char_boundary of the _next_ byte, since we know
                                 // char_start already points to a boundary.
                                 char_end: self.source.ceil_char_boundary(char_start + 1),
-                                line: self.line,
+                                line: line,
                                 source: self.source,
                             });
                             match process_results {
@@ -734,7 +737,7 @@ mod tests {
     fn test_keywords() {
         let keywords_token_types = vec![
             ("and", TokenType::And),
-            ("break", TokenType::Break),
+            // ("break", TokenType::Break),
             ("class", TokenType::Class),
             ("else", TokenType::Else),
             ("false", TokenType::False),
@@ -923,6 +926,35 @@ mod tests {
         assert_eq!(
             tokens,
             vec![TokenType::LeftParen.to_token(1, "("), EOF_LINE_1]
+        );
+    }
+
+    #[test]
+    fn test_newline_at_end_of_expression() {
+        // First test w/o an ending newline
+        let tokens = scan_to_completion("1 + 2").unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                TokenType::Number.to_token(1, "1"),
+                TokenType::Plus.to_token(1, "+"),
+                TokenType::Number.to_token(1, "2"),
+                TokenType::Eof.to_token(1, ""),
+            ]
+        );
+
+        // Then test w/ an ending newline
+        let tokens = scan_to_completion("1 + 2\n").unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                TokenType::Number.to_token(1, "1"),
+                TokenType::Plus.to_token(1, "+"),
+                TokenType::Number.to_token(1, "2"),
+                TokenType::Eof.to_token(2, ""),
+            ]
         );
     }
 
