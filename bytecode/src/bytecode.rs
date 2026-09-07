@@ -6,10 +6,17 @@ use crate::value::Value;
 pub(crate) enum OpCode {
     ConstantLong,
     Constant,
+    Nil,
+    True,
+    False,
+    Equal,
+    Greater,
+    Less,
     Add,
     Subtract,
     Multiply,
     Divide,
+    Not,
     Negate,
     Return,
 }
@@ -44,9 +51,16 @@ impl OpCode {
             Self::Constant => "CONSTANT",
             Self::Return => "RETURN",
             Self::ConstantLong => "CONSTANT_LONG",
+            Self::Nil => "NIL",
+            Self::True => "TRUE",
+            Self::False => "FALSE",
+            Self::Equal => "EQUAL",
+            Self::Greater => "GREATER",
+            Self::Less => "LESS",
             Self::Negate => "NEGATE",
             Self::Add => "ADD",
             Self::Subtract => "SUBTRACT",
+            Self::Not => "NOT",
             Self::Multiply => "MULTIPLY",
             Self::Divide => "DIVIDE",
         }
@@ -319,12 +333,12 @@ mod tests {
         let mut chunk = Chunk::new();
         // First 256 constants should be just OpConstant
         for i in 0..=0xFF {
-            chunk.write_constant(crate::value::Value::new(i as f64), 123);
+            chunk.write_constant(crate::value::Value::new_number(i as f64), 123);
             assert!(chunk.code[chunk.code.len() - 2] == OpCode::Constant.to_byte());
         }
         // All other constants should be OpConstantLong
         for i in 0..=0xFF {
-            chunk.write_constant(crate::value::Value::new(i as f64), 123);
+            chunk.write_constant(crate::value::Value::new_number(i as f64), 123);
             assert!(chunk.code[chunk.code.len() - 4] == OpCode::ConstantLong.to_byte());
         }
     }

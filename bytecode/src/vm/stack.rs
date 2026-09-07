@@ -27,9 +27,27 @@ impl Stack {
         self.stack[idx] = f(self.stack[idx]);
     }
 
+    #[inline]
+    pub(super) fn apply_to_top_num2num(&mut self, f: impl Fn(f64) -> f64) -> Result<(), ()> {
+        let idx = self.stack.len() - 1;
+        self.stack[idx] = Value::new_number(f(self.stack[idx].as_number()?));
+        Ok(())
+    }
+
+    #[inline]
+    pub(super) fn apply_to_top_num2bool(&mut self, f: impl Fn(f64) -> bool) -> Result<(), ()> {
+        let idx = self.stack.len() - 1;
+        self.stack[idx] = Value::new_bool(f(self.stack[idx].as_number()?));
+        Ok(())
+    }
+
     #[cfg(feature = "debug_trace_execution")]
     pub(super) fn stack(&self) -> &Vec<Value> {
         &self.stack
+    }
+
+    pub(super) fn reset(&mut self) {
+        self.stack.clear();
     }
 }
 
@@ -81,6 +99,28 @@ impl Stack {
         }
     }
 
+    #[inline]
+    pub(super) fn apply_to_top_num2num(&mut self, f: impl Fn(f64) -> f64) -> Result<(), ()> {
+        unsafe {
+            // SAFETY: Assumes the stack is NOT emptpy
+            let head = self.stack_top.sub(1);
+            let x = head.read().as_number()?;
+            head.write(Value::new_number(f(x)));
+        }
+        Ok(())
+    }
+
+    #[inline]
+    pub(super) fn apply_to_top_num2bool(&mut self, f: impl Fn(f64) -> bool) -> Result<(), ()> {
+        unsafe {
+            // SAFETY: Assumes the stack is NOT emptpy
+            let head = self.stack_top.sub(1);
+            let x = head.read().as_number()?;
+            head.write(Value::new_bool(f(x)));
+        }
+        Ok(())
+    }
+
     #[cfg(feature = "debug_trace_execution")]
     pub(super) fn stack(&mut self) -> &Vec<Value> {
         unsafe {
@@ -92,5 +132,9 @@ impl Stack {
             self._storage.set_len(new_len as usize);
         }
         &self._storage
+    }
+
+    pub(super) fn reset(&mut self) {
+        self.stack_top = self._storage.as_mut_ptr();
     }
 }

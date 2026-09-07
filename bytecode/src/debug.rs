@@ -50,7 +50,14 @@ impl<W: Write> Disassembler<W> {
                 | OpCode::Add
                 | OpCode::Subtract
                 | OpCode::Multiply
-                | OpCode::Divide),
+                | OpCode::Divide
+                | OpCode::Nil
+                | OpCode::True
+                | OpCode::False
+                | OpCode::Not
+                | OpCode::Equal
+                | OpCode::Greater
+                | OpCode::Less),
             ) => self.simple_instruction(&op.dis_string(), offset),
             // Constant loading instructions
             Ok(op @ OpCode::Constant) => self.constant_instruction(&op.dis_string(), chunk, offset),
@@ -99,7 +106,7 @@ mod tests {
     fn test_constant_long_runs() {
         let mut chunk = Chunk::new();
         for i in 0..300 {
-            chunk.write_constant(crate::value::Value::new(i as f64), 123);
+            chunk.write_constant(crate::value::Value::new_number(i as f64), 123);
         }
         // chunk.write_constant(value::Value::new(1.2), 123);
         chunk.write_op(OpCode::Return, 123);

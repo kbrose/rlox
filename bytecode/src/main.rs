@@ -30,7 +30,7 @@ fn run_file(path: &str) -> ExitCode {
     let error_msg = format!("Failed to read file {}", path);
     let input = std::fs::read_to_string(path).expect(&error_msg);
 
-    let mut vm = VirtualMachine::new();
+    let mut vm = VirtualMachine::new(std::io::stderr());
 
     match vm.interpret(input) {
         InterpretResult::InterpretOk => ExitCode::SUCCESS,
@@ -44,7 +44,7 @@ fn repl() -> ExitCode {
     let stdin = io::stdin();
     println!("Welcome to rlox! Press Ctrl-D to exit.");
 
-    let mut vm = VirtualMachine::new();
+    let mut vm = VirtualMachine::new(std::io::stderr());
 
     loop {
         let mut buffer = String::new();
