@@ -132,7 +132,6 @@ impl Lines {
     }
 }
 
-#[derive(Clone)]
 pub(crate) struct Chunk {
     pub(crate) code: Vec<u8>,
     constants: Vec<Value>,

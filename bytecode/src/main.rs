@@ -1,6 +1,7 @@
 mod bytecode;
 mod compiler;
 mod debug;
+mod heap;
 mod scanner;
 mod value;
 mod vm;
@@ -32,8 +33,8 @@ fn run_file(path: &str) -> ExitCode {
 
     let mut vm = VirtualMachine::new(std::io::stderr());
 
-    match vm.interpret(input) {
-        InterpretResult::InterpretOk => ExitCode::SUCCESS,
+    match vm.interpret(input, std::io::stdout()) {
+        InterpretResult::InterpretOk(_) => ExitCode::SUCCESS,
         InterpretResult::InterpretCompileError | InterpretResult::InterpretRuntimeError => {
             ExitCode::FAILURE
         }
@@ -61,6 +62,6 @@ fn repl() -> ExitCode {
             break ExitCode::SUCCESS;
         }
 
-        vm.interpret(buffer);
+        vm.interpret(buffer, std::io::stdout());
     }
 }

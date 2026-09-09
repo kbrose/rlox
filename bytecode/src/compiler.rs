@@ -2,6 +2,7 @@ use std::io::Write;
 
 use crate::{
     bytecode::{Chunk, OpCode},
+    heap::ObjHeap,
     scanner::{Scanner, Token, TokenType},
     value::Value,
 };
@@ -14,10 +15,16 @@ struct Parser<'a, W: Write> {
     had_error: bool,
     panic_mode: bool,
     error_writer: W,
+    obj_heap: &'a mut ObjHeap,
 }
 
 impl<'a, W: Write> Parser<'a, W> {
-    fn new(scanner: &'a mut Scanner<'a, W>, chunk: &'a mut Chunk, error_writer: W) -> Self {
+    fn new(
+        scanner: &'a mut Scanner<'a, W>,
+        chunk: &'a mut Chunk,
+        error_writer: W,
+        obj_heap: &'a mut ObjHeap,
+    ) -> Self {
         // Prime the pump.
         let mut errored = false;
         let current = loop {
@@ -39,6 +46,7 @@ impl<'a, W: Write> Parser<'a, W> {
             had_error: errored,
             panic_mode: errored,
             error_writer,
+            obj_heap,
         }
     }
 
@@ -74,14 +82,14 @@ impl<'a, W: Write> Parser<'a, W> {
         }
     }
 
-    fn end_compiler(&mut self) {
+    fn end_compiler<W2: Write>(&mut self, dis_writer: &mut W2) {
         #[cfg(feature = "print_code")]
         {
             if !self.had_error {
                 use crate::debug::Disassembler;
 
-                let mut disassembler = Disassembler::new(std::io::stdout());
-                disassembler.disassemble_chunk(&self.chunk, "code");
+                let mut disassembler = Disassembler::new();
+                disassembler.disassemble_chunk(&self.chunk, "code", self.obj_heap, dis_writer);
             }
         }
         self.emit_return();
@@ -114,6 +122,14 @@ impl<'a, W: Write> Parser<'a, W> {
 
         self.chunk
             .write_constant(value, self.previous.line() as usize)
+    }
+
+    fn string(&mut self) {
+        let lexeme = self.previous.lexeme();
+        self.chunk.write_constant(
+            Value::new_string(&lexeme[1..lexeme.len() - 1], self.obj_heap),
+            self.previous.line() as usize,
+        );
     }
 
     fn grouping(&mut self) {
@@ -340,7 +356,7 @@ impl<'a, W: Write> ParseRule<'a, W> {
             TokenType::Less         => ParseRule::new(None,                   Some((Parser::binary, Precedence::Comparison)) ),
             TokenType::LessEqual    => ParseRule::new(None,                   Some((Parser::binary, Precedence::Comparison)) ),
             TokenType::Identifier   => ParseRule::new(None,                   None                                           ),
-            TokenType::String       => ParseRule::new(None,                   None                                           ),
+            TokenType::String       => ParseRule::new(Some(Parser::string),   None                                           ),
             TokenType::Number       => ParseRule::new(Some(Parser::number),   None                                           ),
             TokenType::And          => ParseRule::new(None,                   None                                           ),
             TokenType::Class        => ParseRule::new(None,                   None                                           ),
@@ -363,12 +379,17 @@ impl<'a, W: Write> ParseRule<'a, W> {
     }
 }
 
-pub(crate) fn compile(source: &str, chunk: &mut Chunk) -> Result<(), ()> {
+pub(crate) fn compile<W: Write>(
+    source: &str,
+    chunk: &mut Chunk,
+    obj_heap: &mut ObjHeap,
+    dis_writer: &mut W,
+) -> Result<(), ()> {
     let mut scanner = Scanner::new(source, std::io::stderr());
-    let mut parser = Parser::new(&mut scanner, chunk, std::io::stderr());
+    let mut parser = Parser::new(&mut scanner, chunk, std::io::stderr(), obj_heap);
     parser.expression();
     parser.consume(TokenType::Eof, "Expect end of expression.");
-    parser.end_compiler();
+    parser.end_compiler(dis_writer);
 
     if parser.had_error { Err(()) } else { Ok(()) }
 }
@@ -379,7 +400,9 @@ mod tests {
 
     fn compile_fresh(source: &str) -> Result<Chunk, ()> {
         let mut chunk = Chunk::new();
-        compile(source, &mut chunk)?;
+        let mut obj_heap = ObjHeap::new();
+        let mut sink = std::io::sink();
+        compile(source, &mut chunk, &mut obj_heap, &mut sink)?;
         Ok(chunk)
     }
 
@@ -418,10 +441,16 @@ mod tests {
 
         assert_eq!(OpCode::from_byte(chunk.code[0]), Some(OpCode::Constant));
         assert_eq!(chunk.code[1], 0);
+        assert_eq!(chunk.constant_at_index(0), &Value::Number(1.0));
+
         assert_eq!(OpCode::from_byte(chunk.code[2]), Some(OpCode::Constant));
         assert_eq!(chunk.code[3], 1);
+        assert_eq!(chunk.constant_at_index(1), &Value::Number(2.0));
+
         assert_eq!(OpCode::from_byte(chunk.code[4]), Some(OpCode::Constant));
         assert_eq!(chunk.code[5], 2);
+        assert_eq!(chunk.constant_at_index(2), &Value::Number(3.0));
+
         assert_eq!(OpCode::from_byte(chunk.code[6]), Some(OpCode::Add));
         assert_eq!(OpCode::from_byte(chunk.code[7]), Some(OpCode::Multiply));
         assert_eq!(OpCode::from_byte(chunk.code[8]), Some(OpCode::Return));

@@ -21,6 +21,10 @@ impl Stack {
         self.stack.pop().unwrap()
     }
 
+    pub(super) fn peek(&self, i: usize) -> Value {
+        self.stack[self.stack.len() - 1 - i]
+    }
+
     #[inline]
     pub(super) fn apply_to_top(&mut self, f: impl Fn(Value) -> Value) {
         let idx = self.stack.len() - 1;
@@ -44,10 +48,6 @@ impl Stack {
     #[cfg(feature = "debug_trace_execution")]
     pub(super) fn stack(&self) -> &Vec<Value> {
         &self.stack
-    }
-
-    pub(super) fn reset(&mut self) {
-        self.stack.clear();
     }
 }
 
