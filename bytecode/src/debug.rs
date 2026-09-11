@@ -72,10 +72,10 @@ impl Disassembler {
                 | OpCode::Pop),
             ) => self.simple_instruction(&op.dis_string(), offset, writer),
             // Constant loading instructions
-            Ok(op @ (OpCode::Constant | OpCode::DefineGlobal)) => {
+            Ok(op @ (OpCode::Constant | OpCode::DefineGlobal | OpCode::GetGlobal)) => {
                 self.constant_instruction(&op.dis_string(), chunk, offset, obj_heap, writer)
             }
-            Ok(op @ (OpCode::ConstantLong | OpCode::DefineGlobalLong)) => {
+            Ok(op @ (OpCode::ConstantLong | OpCode::DefineGlobalLong | OpCode::GetGlobalLong)) => {
                 self.constant_long_instruction(&op.dis_string(), chunk, offset, obj_heap, writer)
             }
             // Something else?

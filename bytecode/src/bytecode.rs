@@ -22,6 +22,8 @@ pub(crate) enum OpCode {
     Print,
     DefineGlobal,
     DefineGlobalLong,
+    GetGlobal,
+    GetGlobalLong,
     Return,
 }
 
@@ -71,6 +73,8 @@ impl OpCode {
             Self::Print => "PRINT",
             Self::DefineGlobal => "DEFINE_GLOBAL",
             Self::DefineGlobalLong => "DEFINE_GLOBAL_LONG",
+            Self::GetGlobal => "GET_GLOBAL",
+            Self::GetGlobalLong => "GET_GLOBAL_LONG",
         }
         .to_string()
     }
@@ -146,7 +150,8 @@ pub(crate) enum ConstantIndex {
     Usize(usize),
 }
 
-const _CONSTANT_INDEX_BYTE_ARCHETYPE: ConstantIndex = ConstantIndex::Byte(0);
+const _CONSTANT_INDEX_BYTE_DISC: std::mem::Discriminant<ConstantIndex> =
+    std::mem::discriminant(&ConstantIndex::Byte(0));
 
 pub(crate) struct Chunk {
     pub(crate) code: Vec<u8>,
@@ -249,9 +254,7 @@ impl Chunk {
     }
 
     pub(crate) fn define_variable(&mut self, constant_index: ConstantIndex, line: usize) {
-        let op = if std::mem::discriminant(&constant_index)
-            == std::mem::discriminant(&_CONSTANT_INDEX_BYTE_ARCHETYPE)
-        {
+        let op = if std::mem::discriminant(&constant_index) == _CONSTANT_INDEX_BYTE_DISC {
             OpCode::DefineGlobal
         } else {
             OpCode::DefineGlobalLong
@@ -269,6 +272,15 @@ impl Chunk {
         self.code = Vec::new();
         self.constants = Vec::new();
         self.lines = Lines::new();
+    }
+
+    pub(crate) fn get_global(&mut self, index: ConstantIndex, line: usize) {
+        let op = if std::mem::discriminant(&index) == _CONSTANT_INDEX_BYTE_DISC {
+            OpCode::GetGlobal
+        } else {
+            OpCode::GetGlobalLong
+        };
+        self.write_index(op, index, line);
     }
 }
 

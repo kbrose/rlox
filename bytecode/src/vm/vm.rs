@@ -84,6 +84,55 @@ impl<Wo: Write, We: Write> VirtualMachine<Wo, We> {
         Ok(())
     }
 
+    #[inline]
+    fn define_global(&mut self, value: &Value, stack: &mut Stack) {
+        match value {
+            Value::Obj(typed_heap_index) => {
+                // NOTE! The book code uses .peek(0) here and then pops afterwards.
+                // This is because the book can trigger garbage collection any time
+                // any allocation happens. I'm pretty sure I'm not going to do that,
+                // I see no reason not to do it at the boundary of executing each
+                // op code... (yet). If I change my mind, this needs to change!
+                self.globals
+                    .set(*typed_heap_index, stack.pop(), &self.heap.object_heap());
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[inline]
+    fn get_global(
+        &mut self,
+        name_pointer: &Value,
+        ip: usize,
+        chunk: &Chunk,
+    ) -> Result<Value, InterpretResult> {
+        match name_pointer {
+            Value::Obj(typed_heap_index) => {
+                let out = self
+                    .globals
+                    .get(*typed_heap_index, &self.heap.object_heap());
+                match out {
+                    Some(value) => Ok(value),
+                    None => Err(self.runtime_error(
+                        ip,
+                        chunk,
+                        &format!(
+                            "Undefined variable '{}'.",
+                            match name_pointer {
+                                Value::Obj(typed_heap_index) => unsafe {
+                                    self.heap.get_unchecked_objstr(*typed_heap_index).string()
+                                },
+                                _ => unreachable!(),
+                            }
+                        ),
+                    )),
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
     fn run<W2: Write>(&mut self, chunk: Chunk, mut debug_writer: &mut W2) -> InterpretResult {
         let mut stack: Stack = Stack::new(STACK_MAX);
         let mut ip = 0;
@@ -114,20 +163,12 @@ impl<Wo: Write, We: Write> VirtualMachine<Wo, We> {
             let op = unsafe { chunk.op_unchecked_at_index_unchecked(post_increment(&mut ip)) };
             match op {
                 OpCode::ConstantLong => {
-                    let constant_idx = (chunk.byte_at_index(post_increment(&mut ip)) as usize)
-                        | ((chunk.byte_at_index(post_increment(&mut ip)) as usize) << 8)
-                        | ((chunk.byte_at_index(post_increment(&mut ip)) as usize) << 16);
-
-                    let constant = unsafe { chunk.constant_at_index_unchecked(constant_idx) };
-                    stack.push(*constant);
+                    let constant = get_constant_long(&chunk, &mut ip);
+                    stack.push(constant);
                 }
                 OpCode::Constant => {
-                    let constant = unsafe {
-                        chunk.constant_at_index_unchecked(
-                            chunk.byte_at_index(post_increment(&mut ip)) as usize,
-                        )
-                    };
-                    stack.push(*constant);
+                    let constant = get_constant(&chunk, &mut ip);
+                    stack.push(constant);
                 }
                 OpCode::Nil => stack.push(Value::Nil),
                 OpCode::True => stack.push(Value::Bool(true)),
@@ -135,52 +176,34 @@ impl<Wo: Write, We: Write> VirtualMachine<Wo, We> {
                 OpCode::Pop => {
                     stack.pop();
                 }
-                OpCode::DefineGlobal => {
-                    let constant_value = unsafe {
-                        chunk.constant_at_index_unchecked(
-                            chunk.byte_at_index(post_increment(&mut ip)) as usize,
-                        )
-                    };
-                    match constant_value {
-                        Value::Obj(typed_heap_index) => {
-                            // NOTE! The book code uses .peek(0) here and then pops afterwards.
-                            // This is because the book can trigger garbage collection any time
-                            // any allocation happens. I'm pretty sure I'm not going to do that,
-                            // I see no reason not to do it at the boundary of executing each
-                            // op code... (yet). If I change my mind, this needs to change!
-                            self.globals.set(
-                                *typed_heap_index,
-                                stack.pop(),
-                                &self.heap.object_heap(),
-                            );
+                OpCode::GetGlobal => {
+                    let name_pointer = get_constant(&chunk, &mut ip);
+
+                    match self.get_global(&name_pointer, ip, &chunk) {
+                        Ok(value) => stack.push(value),
+                        Err(result) => {
+                            return result;
                         }
-                        _ => unreachable!(),
                     }
                 }
-                OpCode::DefineGlobalLong => {
-                    let constant_idx = (chunk.byte_at_index(post_increment(&mut ip)) as usize)
-                        | ((chunk.byte_at_index(post_increment(&mut ip)) as usize) << 8)
-                        | ((chunk.byte_at_index(post_increment(&mut ip)) as usize) << 16);
+                OpCode::GetGlobalLong => {
+                    let name_pointer = get_constant_long(&chunk, &mut ip);
 
-                    let constant_value = unsafe {
-                        chunk
-                            .constant_at_index_unchecked(chunk.byte_at_index(constant_idx) as usize)
-                    };
-                    match constant_value {
-                        Value::Obj(typed_heap_index) => {
-                            // NOTE! The book code uses .peek(0) here and then pops afterwards.
-                            // This is because the book can trigger garbage collection any time
-                            // any allocation happens. I'm pretty sure I'm not going to do that,
-                            // I see no reason not to do it at the boundary of executing each
-                            // op code... (yet). If I change my mind, this needs to change!
-                            self.globals.set(
-                                *typed_heap_index,
-                                stack.pop(),
-                                &self.heap.object_heap(),
-                            );
+                    match self.get_global(&name_pointer, ip, &chunk) {
+                        Ok(value) => stack.push(value),
+                        Err(result) => {
+                            return result;
                         }
-                        _ => unreachable!(),
                     }
+                }
+                OpCode::DefineGlobal => {
+                    let constant_value = get_constant(&chunk, &mut ip);
+                    self.define_global(&constant_value, &mut stack);
+                }
+                OpCode::DefineGlobalLong => {
+                    let constant_value = get_constant_long(&chunk, &mut ip);
+
+                    self.define_global(&constant_value, &mut stack);
                 }
                 OpCode::Equal => {
                     let b = stack.pop();
@@ -290,6 +313,22 @@ impl<Wo: Write, We: Write> VirtualMachine<Wo, We> {
 
         InterpretResult::InterpretRuntimeError
     }
+}
+
+fn get_constant(chunk: &Chunk, ip: &mut usize) -> Value {
+    let constant_idx = chunk.byte_at_index(post_increment(ip)) as usize;
+
+    let constant = unsafe { chunk.constant_at_index_unchecked(constant_idx) };
+    *constant
+}
+
+fn get_constant_long(chunk: &Chunk, ip: &mut usize) -> Value {
+    let constant_idx = (chunk.byte_at_index(post_increment(ip)) as usize)
+        | ((chunk.byte_at_index(post_increment(ip)) as usize) << 8)
+        | ((chunk.byte_at_index(post_increment(ip)) as usize) << 16);
+
+    let constant = unsafe { chunk.constant_at_index_unchecked(constant_idx) };
+    *constant
 }
 
 /// An implementation of C's `x++`

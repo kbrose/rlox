@@ -227,6 +227,15 @@ impl<'a, W: Write> Parser<'a, W> {
             .write_constant(value, self.previous.line() as usize);
     }
 
+    fn variable(&mut self) {
+        self.named_variable(self.previous);
+    }
+
+    fn named_variable(&mut self, token: Token) {
+        let index = self.identifier_constant(token);
+        self.chunk.get_global(index, token.line() as usize);
+    }
+
     fn string(&mut self) {
         let lexeme = self.previous.lexeme();
         self.chunk.write_constant(
@@ -458,7 +467,7 @@ impl<'a, W: Write> ParseRule<'a, W> {
             TokenType::GreaterEqual => ParseRule::new(None,                   Some((Parser::binary, Precedence::Comparison)) ),
             TokenType::Less         => ParseRule::new(None,                   Some((Parser::binary, Precedence::Comparison)) ),
             TokenType::LessEqual    => ParseRule::new(None,                   Some((Parser::binary, Precedence::Comparison)) ),
-            TokenType::Identifier   => ParseRule::new(None,                   None                                           ),
+            TokenType::Identifier   => ParseRule::new(Some(Parser::variable), None                                           ),
             TokenType::String       => ParseRule::new(Some(Parser::string),   None                                           ),
             TokenType::Number       => ParseRule::new(Some(Parser::number),   None                                           ),
             TokenType::And          => ParseRule::new(None,                   None                                           ),
