@@ -2,9 +2,9 @@ use std::io::Write;
 
 use crate::{
     bytecode::{Chunk, OpCode},
-    heap::ObjHeap,
     scanner::{Scanner, Token, TokenType},
     value::Value,
+    value::heap::Heap,
 };
 
 struct Parser<'a, W: Write> {
@@ -15,7 +15,7 @@ struct Parser<'a, W: Write> {
     had_error: bool,
     panic_mode: bool,
     error_writer: W,
-    obj_heap: &'a mut ObjHeap,
+    heap: &'a mut Heap,
 }
 
 impl<'a, W: Write> Parser<'a, W> {
@@ -23,7 +23,7 @@ impl<'a, W: Write> Parser<'a, W> {
         scanner: &'a mut Scanner<'a, W>,
         chunk: &'a mut Chunk,
         error_writer: W,
-        obj_heap: &'a mut ObjHeap,
+        heap: &'a mut Heap,
     ) -> Self {
         // Prime the pump.
         let mut errored = false;
@@ -46,7 +46,7 @@ impl<'a, W: Write> Parser<'a, W> {
             had_error: errored,
             panic_mode: errored,
             error_writer,
-            obj_heap,
+            heap,
         }
     }
 
@@ -89,7 +89,7 @@ impl<'a, W: Write> Parser<'a, W> {
                 use crate::debug::Disassembler;
 
                 let mut disassembler = Disassembler::new();
-                disassembler.disassemble_chunk(&self.chunk, "code", self.obj_heap, dis_writer);
+                disassembler.disassemble_chunk(&self.chunk, "code", self.heap, dis_writer);
             }
         }
         self.emit_return();
@@ -127,7 +127,7 @@ impl<'a, W: Write> Parser<'a, W> {
     fn string(&mut self) {
         let lexeme = self.previous.lexeme();
         self.chunk.write_constant(
-            Value::new_string(&lexeme[1..lexeme.len() - 1], self.obj_heap),
+            Value::new_string(lexeme[1..lexeme.len() - 1].to_string(), self.heap),
             self.previous.line() as usize,
         );
     }
@@ -382,7 +382,7 @@ impl<'a, W: Write> ParseRule<'a, W> {
 pub(crate) fn compile<W: Write>(
     source: &str,
     chunk: &mut Chunk,
-    obj_heap: &mut ObjHeap,
+    obj_heap: &mut Heap,
     dis_writer: &mut W,
 ) -> Result<(), ()> {
     let mut scanner = Scanner::new(source, std::io::stderr());
@@ -400,7 +400,7 @@ mod tests {
 
     fn compile_fresh(source: &str) -> Result<Chunk, ()> {
         let mut chunk = Chunk::new();
-        let mut obj_heap = ObjHeap::new();
+        let mut obj_heap = Heap::new();
         let mut sink = std::io::sink();
         compile(source, &mut chunk, &mut obj_heap, &mut sink)?;
         Ok(chunk)

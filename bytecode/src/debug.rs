@@ -2,7 +2,7 @@ use std::io::Write;
 
 use crate::{
     bytecode::{Chunk, OpCode},
-    heap::ObjHeap,
+    value::heap::Heap,
 };
 
 #[allow(unused)]
@@ -22,7 +22,7 @@ impl Disassembler {
         &mut self,
         chunk: &Chunk,
         name: &str,
-        obj_heap: &ObjHeap,
+        obj_heap: &Heap,
         writer: &mut W,
     ) {
         writeln!(writer, "== {} ==", name).unwrap();
@@ -39,7 +39,7 @@ impl Disassembler {
         &mut self,
         chunk: &Chunk,
         offset: usize,
-        obj_heap: &ObjHeap,
+        obj_heap: &Heap,
         writer: &mut W,
     ) -> (usize, usize) {
         write!(writer, "{offset:04} ");
@@ -90,7 +90,7 @@ impl Disassembler {
         name: &str,
         chunk: &Chunk,
         offset: usize,
-        obj_heap: &ObjHeap,
+        obj_heap: &Heap,
         writer: &mut W,
     ) -> usize {
         let constant_idx = chunk.byte_at_index(offset + 1);
@@ -107,7 +107,7 @@ impl Disassembler {
         name: &str,
         chunk: &Chunk,
         offset: usize,
-        obj_heap: &ObjHeap,
+        obj_heap: &Heap,
         writer: &mut W,
     ) -> usize {
         let constant_idx = (chunk.byte_at_index(offset + 1) as usize)
@@ -134,7 +134,7 @@ mod tests {
 
     #[test]
     fn test_constant_long_runs() {
-        let obj_heap = ObjHeap::new();
+        let obj_heap = Heap::new();
         let mut chunk = Chunk::new();
         for i in 0..300 {
             chunk.write_constant(crate::value::Value::new_number(i as f64), 123);

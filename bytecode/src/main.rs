@@ -1,8 +1,8 @@
 mod bytecode;
 mod compiler;
 mod debug;
-mod heap;
 mod scanner;
+mod table;
 mod value;
 mod vm;
 

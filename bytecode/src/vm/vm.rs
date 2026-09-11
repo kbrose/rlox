@@ -3,8 +3,7 @@ use std::io::Write;
 use crate::{
     bytecode::{Chunk, OpCode},
     compiler::compile,
-    heap::ObjHeap,
-    value::{Obj, Value},
+    value::{ObjType, Value, heap::Heap},
     vm::stack::Stack,
 };
 
@@ -20,14 +19,15 @@ const STACK_MAX: usize = 256;
 
 pub(crate) struct VirtualMachine<W: Write> {
     /// Owns all heap-allocated objects.
-    allocated_objects: ObjHeap,
+    heap: Heap,
+    // strings: HashSet<String>,
     error_writer: W,
 }
 
 impl<W: Write> VirtualMachine<W> {
     pub(crate) fn new(error_writer: W) -> Self {
         Self {
-            allocated_objects: ObjHeap::new(),
+            heap: Heap::new(),
             error_writer,
         }
     }
@@ -38,12 +38,7 @@ impl<W: Write> VirtualMachine<W> {
         mut dis_writer: W2,
     ) -> InterpretResult {
         let mut chunk = Chunk::new();
-        let out = compile(
-            &source,
-            &mut chunk,
-            &mut self.allocated_objects,
-            &mut dis_writer,
-        );
+        let out = compile(&source, &mut chunk, &mut self.heap, &mut dis_writer);
         match out {
             Ok(()) => self.run(chunk, &mut dis_writer),
             Err(()) => InterpretResult::InterpretCompileError,
@@ -92,16 +87,11 @@ impl<W: Write> VirtualMachine<W> {
                 write!(debug_writer, "          ").expect("Error writing stack debug strings.");
                 for value in stack.stack().iter() {
                     write!(debug_writer, "[ ").expect("Error writing stack debug strings.");
-                    value.debug_print(&self.allocated_objects, &mut debug_writer);
+                    value.debug_print(&self.heap, &mut debug_writer);
                     write!(debug_writer, " ]").expect("Error writing stack debug strings.");
                 }
                 writeln!(debug_writer).expect("Error writing stack debug strings.");
-                disassembler.disassemble_instruction(
-                    &chunk,
-                    ip,
-                    &self.allocated_objects,
-                    debug_writer,
-                );
+                disassembler.disassemble_instruction(&chunk, ip, &self.heap, debug_writer);
             }
 
             let op = unsafe { chunk.op_unchecked_at_index_unchecked(post_increment(&mut ip)) };
@@ -127,7 +117,7 @@ impl<W: Write> VirtualMachine<W> {
                 OpCode::False => stack.push(Value::Bool(false)),
                 OpCode::Equal => {
                     let b = stack.pop();
-                    stack.apply_to_top(|a| a.is_equal(&b, &self.allocated_objects));
+                    stack.apply_to_top(|a| a.is_equal(&b, &self.heap));
                 }
                 OpCode::Greater => {
                     // TODO: Refactor into this vm function returning a Result<> and updating
@@ -153,27 +143,24 @@ impl<W: Write> VirtualMachine<W> {
                             stack.push(Value::Number(x + y));
                         }
                         (Value::Obj(idx1), Value::Obj(idx2)) => {
-                            match unsafe {
-                                (
-                                    self.allocated_objects.get_unchecked(idx1),
-                                    self.allocated_objects.get_unchecked(idx2),
-                                )
-                            } {
-                                (Obj::String(s1), Obj::String(s2)) => {
+                            let obj1 = unsafe { self.heap.get_unchecked(idx1) };
+                            let obj2 = unsafe { self.heap.get_unchecked(idx2) };
+
+                            match (obj1.obj_type(), obj2.obj_type()) {
+                                (ObjType::String(obj_str1), ObjType::String(obj_str2)) => {
                                     stack.pop();
                                     stack.pop();
-                                    stack.push(Value::Obj(
-                                        self.allocated_objects
-                                            .allocate(Obj::String(format!("{s1}{s2}"))),
+                                    stack.push(Value::new_string(
+                                        format!("{}{}", obj_str1.string(), obj_str2.string()),
+                                        &mut self.heap,
                                     ))
-                                }
-                                _ => {
-                                    return self.runtime_error(
-                                        ip,
-                                        &chunk,
-                                        "Operands must be both numbers or both strings.",
-                                    );
-                                }
+                                } // _ => {
+                                  //     return self.runtime_error(
+                                  //         ip,
+                                  //         &chunk,
+                                  //         "Operands must be both numbers or both strings.",
+                                  //     );
+                                  // }
                             }
                         }
                         _ => {
@@ -184,9 +171,6 @@ impl<W: Write> VirtualMachine<W> {
                             );
                         }
                     }
-                    // if self.binary_op_num2num(&mut stack, |a, b| a + b).is_err() {
-                    //     return self.runtime_error(ip, &chunk, "Operands must be numbers.");
-                    // }
                 }
                 OpCode::Subtract => {
                     if self.binary_op_num2num(&mut stack, |a, b| a - b).is_err() {
@@ -215,7 +199,7 @@ impl<W: Write> VirtualMachine<W> {
                     #[cfg(feature = "debug_trace_execution")]
                     {
                         std::mem::drop(disassembler);
-                        out.debug_print(&self.allocated_objects, &mut debug_writer);
+                        out.debug_print(&self.heap, &mut debug_writer);
                         writeln!(debug_writer).expect("Error writing debug.");
                     }
                     break InterpretResult::InterpretOk(Some(out));
@@ -256,6 +240,13 @@ mod tests {
         vm.interpret(source.to_string(), std::io::sink())
     }
 
+    fn assert_outputs_bool(source: &str, expected: bool) {
+        match run(source) {
+            InterpretResult::InterpretOk(Some(Value::Bool(out))) => assert_eq!(out, expected),
+            _ => assert!(false),
+        }
+    }
+
     fn assert_outputs_number(source: &str, expected: f64) {
         match run(source) {
             InterpretResult::InterpretOk(Some(Value::Number(out))) => assert_eq!(out, expected),
@@ -269,9 +260,13 @@ mod tests {
 
         match out {
             InterpretResult::InterpretOk(Some(Value::Obj(index))) => {
-                match unsafe { vm.allocated_objects.get_unchecked(index) } {
-                    Obj::String(s) => assert_eq!(s, expected),
-                    _ => assert!(false),
+                let obj = unsafe { vm.heap.get_unchecked(index) };
+                match obj.obj_type() {
+                    ObjType::String(obj_str) => {
+                        assert_eq!(obj_str.string(), expected);
+                    } /*
+                      _ => assert!(false),
+                      */
                 }
             }
             _ => assert!(false),
@@ -293,5 +288,10 @@ mod tests {
     #[test]
     fn test_string_concat() {
         assert_outputs_string(r#""Hello, " + "World!""#, "Hello, World!");
+    }
+
+    #[test]
+    fn test_string_equality() {
+        assert_outputs_bool(r#" "abc" == "abc" "#, true);
     }
 }
