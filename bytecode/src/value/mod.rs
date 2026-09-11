@@ -32,13 +32,13 @@ impl Value {
         }
     }
 
-    pub(crate) fn debug_print<W: Write>(self: &Self, heap: &Heap, writer: &mut W) {
+    pub(crate) fn print<W: Write>(self: &Self, heap: &Heap, writer: &mut W) {
         match self {
             Self::Nil => {
                 write!(writer, "Nil").expect("Error writing debug.");
             }
             Self::Number(x) => {
-                write!(writer, "'{}'", x).expect("Error writing debug.");
+                write!(writer, "{}", x).expect("Error writing debug.");
             }
             Self::Bool(b) => {
                 write!(writer, "{}", b).expect("Error writing debug.");

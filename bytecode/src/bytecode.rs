@@ -9,6 +9,7 @@ pub(crate) enum OpCode {
     Nil,
     True,
     False,
+    Pop,
     Equal,
     Greater,
     Less,
@@ -18,6 +19,9 @@ pub(crate) enum OpCode {
     Divide,
     Not,
     Negate,
+    Print,
+    DefineGlobal,
+    DefineGlobalLong,
     Return,
 }
 
@@ -54,6 +58,7 @@ impl OpCode {
             Self::Nil => "NIL",
             Self::True => "TRUE",
             Self::False => "FALSE",
+            Self::Pop => "POP",
             Self::Equal => "EQUAL",
             Self::Greater => "GREATER",
             Self::Less => "LESS",
@@ -63,6 +68,9 @@ impl OpCode {
             Self::Not => "NOT",
             Self::Multiply => "MULTIPLY",
             Self::Divide => "DIVIDE",
+            Self::Print => "PRINT",
+            Self::DefineGlobal => "DEFINE_GLOBAL",
+            Self::DefineGlobalLong => "DEFINE_GLOBAL_LONG",
         }
         .to_string()
     }
@@ -131,6 +139,14 @@ impl Lines {
         }
     }
 }
+
+#[derive(Clone, Copy)]
+pub(crate) enum ConstantIndex {
+    Byte(u8),
+    Usize(usize),
+}
+
+const _CONSTANT_INDEX_BYTE_ARCHETYPE: ConstantIndex = ConstantIndex::Byte(0);
 
 pub(crate) struct Chunk {
     pub(crate) code: Vec<u8>,
@@ -205,17 +221,42 @@ impl Chunk {
         self.lines.add_instruction_line(line);
     }
 
-    pub(crate) fn write_constant(&mut self, value: Value, line: usize) {
-        let index = self.write_value_to_constants(value);
-        if index <= 0xFF {
-            self.write_op(OpCode::Constant, line);
-            self.write_byte(index as u8, line);
-        } else {
-            self.write_op(OpCode::ConstantLong, line);
-            self.write_byte((index & 0xFF) as u8, line);
-            self.write_byte(((index >> 8) & 0xFF) as u8, line);
-            self.write_byte(((index >> 16) & 0xFF) as u8, line);
+    fn write_index(&mut self, op: OpCode, constant_index: ConstantIndex, line: usize) {
+        self.write_op(op, line);
+        match constant_index {
+            ConstantIndex::Byte(index) => {
+                self.write_byte(index, line);
+            }
+            ConstantIndex::Usize(index) => {
+                // Only 24 bit indexes allowed.
+                debug_assert!((index & 0xFFFFFF) == index);
+                self.write_byte((index & 0xFF) as u8, line);
+                self.write_byte(((index >> 8) & 0xFF) as u8, line);
+                self.write_byte(((index >> 16) & 0xFF) as u8, line);
+            }
         }
+    }
+
+    pub(crate) fn write_constant(&mut self, value: Value, line: usize) -> ConstantIndex {
+        let index = self.write_value_to_constants(value);
+        let (out, op) = if index <= 0xFF {
+            (ConstantIndex::Byte(index as u8), OpCode::Constant)
+        } else {
+            (ConstantIndex::Usize(index as usize), OpCode::ConstantLong)
+        };
+        self.write_index(op, out, line);
+        out
+    }
+
+    pub(crate) fn define_variable(&mut self, constant_index: ConstantIndex, line: usize) {
+        let op = if std::mem::discriminant(&constant_index)
+            == std::mem::discriminant(&_CONSTANT_INDEX_BYTE_ARCHETYPE)
+        {
+            OpCode::DefineGlobal
+        } else {
+            OpCode::DefineGlobalLong
+        };
+        self.write_index(op, constant_index, line)
     }
 
     fn write_value_to_constants(&mut self, value: Value) -> usize {

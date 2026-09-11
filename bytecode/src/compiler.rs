@@ -1,10 +1,12 @@
 use std::io::Write;
 
 use crate::{
-    bytecode::{Chunk, OpCode},
-    scanner::{Scanner, Token, TokenType},
-    value::Value,
-    value::heap::Heap,
+    bytecode::{Chunk, ConstantIndex, OpCode},
+    scanner::{
+        Scanner, Token,
+        TokenType::{self, Semicolon},
+    },
+    value::{Value, heap::Heap},
 };
 
 struct Parser<'a, W: Write> {
@@ -74,11 +76,24 @@ impl<'a, W: Write> Parser<'a, W> {
         };
     }
 
+    fn check(&self, token_type: TokenType) -> bool {
+        self.current.token_type() == token_type
+    }
+
     fn consume(&mut self, token_type: TokenType, message: &str) {
         if self.current.token_type() == token_type {
             self.advance();
         } else {
             self.error_at_current(message);
+        }
+    }
+
+    fn matches(&mut self, token_type: TokenType) -> bool {
+        if self.check(token_type) {
+            self.advance();
+            true
+        } else {
+            false
         }
     }
 
@@ -95,7 +110,95 @@ impl<'a, W: Write> Parser<'a, W> {
         self.emit_return();
     }
 
+    fn synchronize(&mut self) {
+        self.panic_mode = false;
+
+        loop {
+            if self.previous.token_type() == TokenType::Semicolon {
+                return;
+            }
+            match self.current.token_type() {
+                TokenType::Class
+                | TokenType::Fun
+                | TokenType::Var
+                | TokenType::For
+                | TokenType::If
+                | TokenType::While
+                | TokenType::Print
+                | TokenType::Return
+                // The Eof below here is what "guarantees" the loop exits. A well-formed
+                // scanner will ALWAYS return an Eof eventually.
+                | TokenType::Eof => {
+                    return;
+                }
+                _ => {}
+            }
+            self.advance();
+        }
+    }
+
+    fn parse_variable(&mut self, message: &str) -> ConstantIndex {
+        self.consume(TokenType::Identifier, message);
+        self.identifier_constant(self.previous)
+    }
+
+    fn identifier_constant(&mut self, token: Token) -> ConstantIndex {
+        let obj = self.heap.allocate_string(token.lexeme().to_string());
+        self.chunk.write_constant(obj, token.line() as usize)
+    }
+
+    fn define_variable(&mut self, constant_index: ConstantIndex) {
+        self.chunk
+            .define_variable(constant_index, self.previous.line() as usize);
+    }
+
     // Vaughan Pratt’s "top-down operator precedence parsing"
+
+    fn declaration(&mut self) {
+        self.statement();
+
+        if self.panic_mode {
+            self.synchronize();
+        }
+    }
+
+    fn statement(&mut self) {
+        if self.matches(TokenType::Var) {
+            self.var_declaration();
+        } else if self.matches(TokenType::Print) {
+            self.print_statement();
+        } else {
+            self.expression_statement();
+        }
+    }
+
+    fn var_declaration(&mut self) {
+        let global = self.parse_variable("Expect a variable name.");
+
+        if self.matches(TokenType::Equal) {
+            self.expression();
+        } else {
+            self.emit_op(OpCode::Nil);
+        }
+        self.consume(
+            TokenType::Semicolon,
+            "Expect ';' after variable declaration.",
+        );
+
+        self.define_variable(global);
+    }
+
+    fn print_statement(&mut self) {
+        self.expression();
+        self.consume(TokenType::Semicolon, "Expect ';' after value.");
+        self.emit_op(OpCode::Print);
+    }
+
+    fn expression_statement(&mut self) {
+        self.expression();
+        self.consume(TokenType::Semicolon, "Expect ';' after expression.");
+        self.emit_op(OpCode::Pop);
+    }
 
     fn expression(&mut self) {
         self.parse_precedence(Precedence::Assignment.to_u8());
@@ -121,7 +224,7 @@ impl<'a, W: Write> Parser<'a, W> {
         )));
 
         self.chunk
-            .write_constant(value, self.previous.line() as usize)
+            .write_constant(value, self.previous.line() as usize);
     }
 
     fn string(&mut self) {
@@ -387,8 +490,11 @@ pub(crate) fn compile<W: Write>(
 ) -> Result<(), ()> {
     let mut scanner = Scanner::new(source, std::io::stderr());
     let mut parser = Parser::new(&mut scanner, chunk, std::io::stderr(), obj_heap);
-    parser.expression();
-    parser.consume(TokenType::Eof, "Expect end of expression.");
+
+    while !parser.matches(TokenType::Eof) {
+        parser.declaration();
+    }
+    // parser.consume(TokenType::Eof, "Expect end of expression.");
     parser.end_compiler(dis_writer);
 
     if parser.had_error { Err(()) } else { Ok(()) }
@@ -408,23 +514,25 @@ mod tests {
 
     #[test]
     fn test_simple() {
-        let chunk = compile_fresh("1").expect("Compile error");
+        let chunk = compile_fresh("print 1;").expect("Compile error");
 
-        // This code should get parsed into 3 bytes:
+        // This code should get parsed into 4 bytes:
         // 1. CONSTANT
         // 2. index into constants table (should be 0 since this is the one and only constant)
-        // 3. Return
+        // 3. PRINT
+        // 4. RETURN
 
-        assert!(chunk.code.len() == 3);
+        assert!(chunk.code.len() == 4);
 
         assert_eq!(OpCode::from_byte(chunk.code[0]), Some(OpCode::Constant));
         assert_eq!(chunk.code[1], 0);
-        assert_eq!(OpCode::from_byte(chunk.code[2]), Some(OpCode::Return));
+        assert_eq!(OpCode::from_byte(chunk.code[2]), Some(OpCode::Print));
+        assert_eq!(OpCode::from_byte(chunk.code[3]), Some(OpCode::Return));
     }
 
     #[test]
     fn test_complex() {
-        let chunk = compile_fresh("1 * (2 + 3)").expect("Compile error");
+        let chunk = compile_fresh("print 1 * (2 + 3);").expect("Compile error");
 
         // This code should get parsed into 9 bytes:
         // 1. CONSTANT
@@ -435,9 +543,10 @@ mod tests {
         // 6. index into constants table (2)
         // 7. Add
         // 8. Multiply
-        // 9. Return
+        // 9. Print
+        // 10. Return
 
-        assert!(chunk.code.len() == 9);
+        assert!(chunk.code.len() == 10);
 
         assert_eq!(OpCode::from_byte(chunk.code[0]), Some(OpCode::Constant));
         assert_eq!(chunk.code[1], 0);
@@ -453,6 +562,12 @@ mod tests {
 
         assert_eq!(OpCode::from_byte(chunk.code[6]), Some(OpCode::Add));
         assert_eq!(OpCode::from_byte(chunk.code[7]), Some(OpCode::Multiply));
-        assert_eq!(OpCode::from_byte(chunk.code[8]), Some(OpCode::Return));
+        assert_eq!(OpCode::from_byte(chunk.code[8]), Some(OpCode::Print));
+        assert_eq!(OpCode::from_byte(chunk.code[9]), Some(OpCode::Return));
+    }
+
+    #[test]
+    fn test_bad_syntax() {
+        assert!(compile_fresh("1").is_err());
     }
 }

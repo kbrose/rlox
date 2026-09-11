@@ -1,8 +1,9 @@
-use std::io::Write;
+use std::io::{Stderr, Stdout, Write};
 
 use crate::{
     bytecode::{Chunk, OpCode},
     compiler::compile,
+    table::Table,
     value::{ObjType, Value, heap::Heap},
     vm::stack::Stack,
 };
@@ -10,25 +11,41 @@ use crate::{
 #[allow(unused)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum InterpretResult {
-    InterpretOk(Option<Value>),
+    InterpretOk,
     InterpretCompileError,
     InterpretRuntimeError,
 }
 
 const STACK_MAX: usize = 256;
 
-pub(crate) struct VirtualMachine<W: Write> {
+pub(crate) struct VirtualMachine<Wo: Write, We: Write> {
     /// Owns all heap-allocated objects.
     heap: Heap,
     // strings: HashSet<String>,
-    error_writer: W,
+    writer: Wo,
+    error_writer: We,
+    globals: Table,
 }
 
-impl<W: Write> VirtualMachine<W> {
-    pub(crate) fn new(error_writer: W) -> Self {
+impl VirtualMachine<Stdout, Stderr> {
+    pub(crate) fn new_with_std_io() -> Self {
         Self {
             heap: Heap::new(),
+            writer: std::io::stdout(),
+            error_writer: std::io::stderr(),
+            globals: Table::new(),
+        }
+    }
+}
+
+impl<Wo: Write, We: Write> VirtualMachine<Wo, We> {
+    #[allow(unused)]
+    pub(crate) fn new(writer: Wo, error_writer: We) -> Self {
+        Self {
+            heap: Heap::new(),
+            writer,
             error_writer,
+            globals: Table::new(),
         }
     }
 
@@ -71,7 +88,7 @@ impl<W: Write> VirtualMachine<W> {
         let mut stack: Stack = Stack::new(STACK_MAX);
         let mut ip = 0;
         if chunk.code.len() == 0 {
-            return InterpretResult::InterpretOk(None);
+            return InterpretResult::InterpretOk;
         }
 
         #[cfg(feature = "debug_trace_execution")]
@@ -87,7 +104,7 @@ impl<W: Write> VirtualMachine<W> {
                 write!(debug_writer, "          ").expect("Error writing stack debug strings.");
                 for value in stack.stack().iter() {
                     write!(debug_writer, "[ ").expect("Error writing stack debug strings.");
-                    value.debug_print(&self.heap, &mut debug_writer);
+                    value.print(&self.heap, &mut debug_writer);
                     write!(debug_writer, " ]").expect("Error writing stack debug strings.");
                 }
                 writeln!(debug_writer).expect("Error writing stack debug strings.");
@@ -115,6 +132,56 @@ impl<W: Write> VirtualMachine<W> {
                 OpCode::Nil => stack.push(Value::Nil),
                 OpCode::True => stack.push(Value::Bool(true)),
                 OpCode::False => stack.push(Value::Bool(false)),
+                OpCode::Pop => {
+                    stack.pop();
+                }
+                OpCode::DefineGlobal => {
+                    let constant_value = unsafe {
+                        chunk.constant_at_index_unchecked(
+                            chunk.byte_at_index(post_increment(&mut ip)) as usize,
+                        )
+                    };
+                    match constant_value {
+                        Value::Obj(typed_heap_index) => {
+                            // NOTE! The book code uses .peek(0) here and then pops afterwards.
+                            // This is because the book can trigger garbage collection any time
+                            // any allocation happens. I'm pretty sure I'm not going to do that,
+                            // I see no reason not to do it at the boundary of executing each
+                            // op code... (yet). If I change my mind, this needs to change!
+                            self.globals.set(
+                                *typed_heap_index,
+                                stack.pop(),
+                                &self.heap.object_heap(),
+                            );
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                OpCode::DefineGlobalLong => {
+                    let constant_idx = (chunk.byte_at_index(post_increment(&mut ip)) as usize)
+                        | ((chunk.byte_at_index(post_increment(&mut ip)) as usize) << 8)
+                        | ((chunk.byte_at_index(post_increment(&mut ip)) as usize) << 16);
+
+                    let constant_value = unsafe {
+                        chunk
+                            .constant_at_index_unchecked(chunk.byte_at_index(constant_idx) as usize)
+                    };
+                    match constant_value {
+                        Value::Obj(typed_heap_index) => {
+                            // NOTE! The book code uses .peek(0) here and then pops afterwards.
+                            // This is because the book can trigger garbage collection any time
+                            // any allocation happens. I'm pretty sure I'm not going to do that,
+                            // I see no reason not to do it at the boundary of executing each
+                            // op code... (yet). If I change my mind, this needs to change!
+                            self.globals.set(
+                                *typed_heap_index,
+                                stack.pop(),
+                                &self.heap.object_heap(),
+                            );
+                        }
+                        _ => unreachable!(),
+                    }
+                }
                 OpCode::Equal => {
                     let b = stack.pop();
                     stack.apply_to_top(|a| a.is_equal(&b, &self.heap));
@@ -193,16 +260,21 @@ impl<W: Write> VirtualMachine<W> {
                         return self.runtime_error(ip, &chunk, "Operand must be a number.");
                     }
                 }
+                OpCode::Print => {
+                    let value = stack.pop();
+                    value.print(&self.heap, &mut self.writer);
+                    writeln!(self.writer, "").expect("Error printing.");
+                }
                 OpCode::Return => {
-                    #[allow(unused)]
-                    let out = stack.pop();
-                    #[cfg(feature = "debug_trace_execution")]
-                    {
-                        std::mem::drop(disassembler);
-                        out.debug_print(&self.heap, &mut debug_writer);
-                        writeln!(debug_writer).expect("Error writing debug.");
-                    }
-                    break InterpretResult::InterpretOk(Some(out));
+                    // #[allow(unused)]
+                    // let out = stack.pop();
+                    // #[cfg(feature = "debug_trace_execution")]
+                    // {
+                    //     std::mem::drop(disassembler);
+                    //     out.print(&self.heap, &mut debug_writer);
+                    //     writeln!(debug_writer).expect("Error writing debug.");
+                    // }
+                    break InterpretResult::InterpretOk;
                 }
             }
         }
@@ -235,63 +307,45 @@ mod tests {
     // but I wanted to get some in place while we do larger changes to the codebase.
     // It's better than manual tests.
 
-    fn run(source: &str) -> InterpretResult {
-        let mut vm = VirtualMachine::new(std::io::sink());
-        vm.interpret(source.to_string(), std::io::sink())
-    }
-
-    fn assert_outputs_bool(source: &str, expected: bool) {
-        match run(source) {
-            InterpretResult::InterpretOk(Some(Value::Bool(out))) => assert_eq!(out, expected),
-            _ => assert!(false),
-        }
-    }
-
-    fn assert_outputs_number(source: &str, expected: f64) {
-        match run(source) {
-            InterpretResult::InterpretOk(Some(Value::Number(out))) => assert_eq!(out, expected),
-            _ => assert!(false),
-        }
-    }
-
-    fn assert_outputs_string(source: &str, expected: &str) {
-        let mut vm = VirtualMachine::new(std::io::sink());
+    fn run(source: &str) -> (String, InterpretResult) {
+        let mut buffer = Vec::new();
+        let mut vm = VirtualMachine::new(&mut buffer, std::io::sink());
         let out = vm.interpret(source.to_string(), std::io::sink());
+        (
+            String::from_utf8(buffer).expect("The VM printed non-utf8"),
+            out,
+        )
+    }
 
-        match out {
-            InterpretResult::InterpretOk(Some(Value::Obj(index))) => {
-                let obj = unsafe { vm.heap.get_unchecked(index) };
-                match obj.obj_type() {
-                    ObjType::String(obj_str) => {
-                        assert_eq!(obj_str.string(), expected);
-                    } /*
-                      _ => assert!(false),
-                      */
-                }
-            }
+    fn assert_expression_prints_expected(source: &str, expected: &str) {
+        let source = format!("print {source};");
+        let (printed, result) = run(&source);
+        match result {
+            InterpretResult::InterpretOk => assert_eq!(format!("{expected}\n"), printed),
             _ => assert!(false),
         }
     }
+
     #[test]
     fn test_load() {
-        assert_outputs_number("1", 1.0);
+        assert_expression_prints_expected("1", "1");
     }
 
     #[test]
     fn test_arithmetic() {
-        assert_outputs_number("1 + 1", 2.0);
-        assert_outputs_number("1 / 2", 0.5);
-        assert_outputs_number("2 * 3", 6.0);
-        assert_outputs_number("4 - 5", -1.0);
+        assert_expression_prints_expected("1 + 1", "2");
+        assert_expression_prints_expected("1 / 2", "0.5");
+        assert_expression_prints_expected("2 * 3", "6");
+        assert_expression_prints_expected("4 - 5", "-1");
     }
 
     #[test]
     fn test_string_concat() {
-        assert_outputs_string(r#""Hello, " + "World!""#, "Hello, World!");
+        assert_expression_prints_expected(r#""Hello, " + "World!""#, "Hello, World!");
     }
 
     #[test]
     fn test_string_equality() {
-        assert_outputs_bool(r#" "abc" == "abc" "#, true);
+        assert_expression_prints_expected(r#" "abc" == "abc" "#, "true");
     }
 }

@@ -67,13 +67,15 @@ impl Disassembler {
                 | OpCode::Not
                 | OpCode::Equal
                 | OpCode::Greater
-                | OpCode::Less),
+                | OpCode::Less
+                | OpCode::Print
+                | OpCode::Pop),
             ) => self.simple_instruction(&op.dis_string(), offset, writer),
             // Constant loading instructions
-            Ok(op @ OpCode::Constant) => {
+            Ok(op @ (OpCode::Constant | OpCode::DefineGlobal)) => {
                 self.constant_instruction(&op.dis_string(), chunk, offset, obj_heap, writer)
             }
-            Ok(op @ OpCode::ConstantLong) => {
+            Ok(op @ (OpCode::ConstantLong | OpCode::DefineGlobalLong)) => {
                 self.constant_long_instruction(&op.dis_string(), chunk, offset, obj_heap, writer)
             }
             // Something else?
@@ -97,7 +99,7 @@ impl Disassembler {
         write!(writer, "{:<14} {:4} ", name, constant_idx).unwrap();
         chunk
             .constant_at_index(constant_idx as usize)
-            .debug_print(obj_heap, writer);
+            .print(obj_heap, writer);
         writeln!(writer).unwrap();
         offset + 2
     }
@@ -117,7 +119,7 @@ impl Disassembler {
         write!(writer, "{:<14} {:4} ", name, constant_idx).unwrap();
         chunk
             .constant_at_index(constant_idx)
-            .debug_print(obj_heap, writer);
+            .print(obj_heap, writer);
         writeln!(writer).unwrap();
         offset + 4
     }
