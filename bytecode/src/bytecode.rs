@@ -22,6 +22,8 @@ pub(crate) enum OpCode {
     Print,
     DefineGlobal,
     DefineGlobalLong,
+    SetGlobal,
+    SetGlobalLong,
     GetGlobal,
     GetGlobalLong,
     Return,
@@ -75,6 +77,8 @@ impl OpCode {
             Self::DefineGlobalLong => "DEFINE_GLOBAL_LONG",
             Self::GetGlobal => "GET_GLOBAL",
             Self::GetGlobalLong => "GET_GLOBAL_LONG",
+            Self::SetGlobal => "SET_GLOBAL",
+            Self::SetGlobalLong => "SET_GLOBAL_LONG",
         }
         .to_string()
     }
@@ -242,6 +246,15 @@ impl Chunk {
         }
     }
 
+    pub(crate) fn add_to_constants(&mut self, value: Value) -> ConstantIndex {
+        let index = self.write_value_to_constants(value);
+        if index <= 0xFF {
+            ConstantIndex::Byte(index as u8)
+        } else {
+            ConstantIndex::Usize(index)
+        }
+    }
+
     pub(crate) fn write_constant(&mut self, value: Value, line: usize) -> ConstantIndex {
         let index = self.write_value_to_constants(value);
         let (out, op) = if index <= 0xFF {
@@ -253,13 +266,31 @@ impl Chunk {
         out
     }
 
-    pub(crate) fn define_variable(&mut self, constant_index: ConstantIndex, line: usize) {
+    pub(crate) fn define_global(&mut self, constant_index: ConstantIndex, line: usize) {
         let op = if std::mem::discriminant(&constant_index) == _CONSTANT_INDEX_BYTE_DISC {
             OpCode::DefineGlobal
         } else {
             OpCode::DefineGlobalLong
         };
         self.write_index(op, constant_index, line)
+    }
+
+    pub(crate) fn set_global(&mut self, constant_index: ConstantIndex, line: usize) {
+        let op = if std::mem::discriminant(&constant_index) == _CONSTANT_INDEX_BYTE_DISC {
+            OpCode::SetGlobal
+        } else {
+            OpCode::SetGlobalLong
+        };
+        self.write_index(op, constant_index, line)
+    }
+
+    pub(crate) fn get_global(&mut self, index: ConstantIndex, line: usize) {
+        let op = if std::mem::discriminant(&index) == _CONSTANT_INDEX_BYTE_DISC {
+            OpCode::GetGlobal
+        } else {
+            OpCode::GetGlobalLong
+        };
+        self.write_index(op, index, line);
     }
 
     fn write_value_to_constants(&mut self, value: Value) -> usize {
@@ -272,15 +303,6 @@ impl Chunk {
         self.code = Vec::new();
         self.constants = Vec::new();
         self.lines = Lines::new();
-    }
-
-    pub(crate) fn get_global(&mut self, index: ConstantIndex, line: usize) {
-        let op = if std::mem::discriminant(&index) == _CONSTANT_INDEX_BYTE_DISC {
-            OpCode::GetGlobal
-        } else {
-            OpCode::GetGlobalLong
-        };
-        self.write_index(op, index, line);
     }
 }
 

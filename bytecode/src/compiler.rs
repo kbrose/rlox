@@ -4,7 +4,7 @@ use crate::{
     bytecode::{Chunk, ConstantIndex, OpCode},
     scanner::{
         Scanner, Token,
-        TokenType::{self, Semicolon},
+        TokenType::{self},
     },
     value::{Value, heap::Heap},
 };
@@ -144,18 +144,22 @@ impl<'a, W: Write> Parser<'a, W> {
 
     fn identifier_constant(&mut self, token: Token) -> ConstantIndex {
         let obj = self.heap.allocate_string(token.lexeme().to_string());
-        self.chunk.write_constant(obj, token.line() as usize)
+        self.chunk.add_to_constants(obj)
     }
 
     fn define_variable(&mut self, constant_index: ConstantIndex) {
         self.chunk
-            .define_variable(constant_index, self.previous.line() as usize);
+            .define_global(constant_index, self.previous.line() as usize);
     }
 
     // Vaughan Pratt’s "top-down operator precedence parsing"
 
     fn declaration(&mut self) {
-        self.statement();
+        if self.matches(TokenType::Var) {
+            self.var_declaration();
+        } else {
+            self.statement();
+        }
 
         if self.panic_mode {
             self.synchronize();
@@ -163,9 +167,7 @@ impl<'a, W: Write> Parser<'a, W> {
     }
 
     fn statement(&mut self) {
-        if self.matches(TokenType::Var) {
-            self.var_declaration();
-        } else if self.matches(TokenType::Print) {
+        if self.matches(TokenType::Print) {
             self.print_statement();
         } else {
             self.expression_statement();
@@ -204,19 +206,19 @@ impl<'a, W: Write> Parser<'a, W> {
         self.parse_precedence(Precedence::Assignment.to_u8());
     }
 
-    fn false_(&mut self) {
+    fn false_(&mut self, _can_assign: bool) {
         self.emit_op(OpCode::False);
     }
 
-    fn true_(&mut self) {
+    fn true_(&mut self, _can_assign: bool) {
         self.emit_op(OpCode::True);
     }
 
-    fn nil(&mut self) {
+    fn nil(&mut self, _can_assign: bool) {
         self.emit_op(OpCode::Nil);
     }
 
-    fn number(&mut self) {
+    fn number(&mut self, _can_assign: bool) {
         let lexeme = self.previous.lexeme();
         let value = Value::new_number(lexeme.parse().expect(&format!(
             "Scanning went awry: failed to parse number lexeme '{}' as f64",
@@ -227,16 +229,21 @@ impl<'a, W: Write> Parser<'a, W> {
             .write_constant(value, self.previous.line() as usize);
     }
 
-    fn variable(&mut self) {
-        self.named_variable(self.previous);
+    fn variable(&mut self, can_assign: bool) {
+        self.named_variable(self.previous, can_assign);
     }
 
-    fn named_variable(&mut self, token: Token) {
+    fn named_variable(&mut self, token: Token, can_assign: bool) {
         let index = self.identifier_constant(token);
-        self.chunk.get_global(index, token.line() as usize);
+        if can_assign && self.matches(TokenType::Equal) {
+            self.expression();
+            self.chunk.set_global(index, token.line() as usize);
+        } else {
+            self.chunk.get_global(index, token.line() as usize);
+        }
     }
 
-    fn string(&mut self) {
+    fn string(&mut self, _can_assign: bool) {
         let lexeme = self.previous.lexeme();
         self.chunk.write_constant(
             Value::new_string(lexeme[1..lexeme.len() - 1].to_string(), self.heap),
@@ -244,12 +251,12 @@ impl<'a, W: Write> Parser<'a, W> {
         );
     }
 
-    fn grouping(&mut self) {
+    fn grouping(&mut self, _can_assign: bool) {
         self.expression();
         self.consume(TokenType::RightParen, "Expect ')' after expression.");
     }
 
-    fn unary(&mut self) {
+    fn unary(&mut self, _can_assign: bool) {
         let operator_type = self.previous.token_type();
 
         self.parse_precedence(Precedence::Unary.to_u8());
@@ -269,7 +276,7 @@ impl<'a, W: Write> Parser<'a, W> {
     // (more optimal, more type safe) to have one function per operator that
     // hard codes its precedence and token, rather than looking it up dynamically
     // in the previous token.
-    fn binary(&mut self) {
+    fn binary(&mut self, _can_assign: bool) {
         let operator_type = self.previous.token_type();
         let rule = ParseRule::<'a, W>::from_token_type(operator_type);
         self.parse_precedence(rule.infix_and_precedence.unwrap().1.to_u8() + 1);
@@ -307,7 +314,9 @@ impl<'a, W: Write> Parser<'a, W> {
     fn parse_precedence(&mut self, precedence: u8) {
         self.advance();
         if let Some(prefix_fn) = ParseRule::from_token_type(self.previous.token_type()).prefix {
-            prefix_fn(self);
+            let can_assign = precedence <= Precedence::Assignment.to_u8();
+
+            prefix_fn(self, can_assign);
 
             loop {
                 match ParseRule::<'a, W>::from_token_type(self.current.token_type())
@@ -320,11 +329,15 @@ impl<'a, W: Write> Parser<'a, W> {
 
                         self.advance();
 
-                        infix_fn(self);
+                        infix_fn(self, can_assign);
                     }
                     None => {
                         break;
                     }
+                }
+
+                if can_assign && self.matches(TokenType::Equal) {
+                    self.error("Invalid assignment target.");
                 }
             }
         } else {
@@ -413,7 +426,7 @@ impl Precedence {
     }
 }
 
-type ParseFn<'a, W> = fn(&mut Parser<'a, W>);
+type ParseFn<'a, W> = fn(&mut Parser<'a, W>, bool);
 
 struct ParseRule<'a, W: Write> {
     prefix: Option<ParseFn<'a, W>>,

@@ -101,6 +101,37 @@ impl<Wo: Write, We: Write> VirtualMachine<Wo, We> {
     }
 
     #[inline]
+    fn set_global(
+        &mut self,
+        name_pointer: Value,
+        ip: usize,
+        chunk: &Chunk,
+        stack: &Stack,
+    ) -> Result<(), InterpretResult> {
+        match name_pointer {
+            Value::Obj(typed_heap_index) => {
+                if self
+                    .globals
+                    .set(typed_heap_index, stack.peek(0), self.heap.object_heap())
+                {
+                    self.globals
+                        .delete(typed_heap_index, &self.heap.object_heap());
+                    Err(self.runtime_error(
+                        ip,
+                        &chunk,
+                        &format!("Undefined variable '{}'.", unsafe {
+                            self.heap.get_unchecked_objstr(typed_heap_index).string()
+                        }),
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[inline]
     fn get_global(
         &mut self,
         name_pointer: &Value,
@@ -175,6 +206,22 @@ impl<Wo: Write, We: Write> VirtualMachine<Wo, We> {
                 OpCode::False => stack.push(Value::Bool(false)),
                 OpCode::Pop => {
                     stack.pop();
+                }
+                OpCode::SetGlobal => {
+                    let name_pointer = get_constant(&chunk, &mut ip);
+
+                    match self.set_global(name_pointer, ip, &chunk, &stack) {
+                        Ok(()) => {}
+                        Err(result) => return result,
+                    }
+                }
+                OpCode::SetGlobalLong => {
+                    let name_pointer = get_constant_long(&chunk, &mut ip);
+
+                    match self.set_global(name_pointer, ip, &chunk, &stack) {
+                        Ok(()) => {}
+                        Err(result) => return result,
+                    }
                 }
                 OpCode::GetGlobal => {
                     let name_pointer = get_constant(&chunk, &mut ip);
@@ -365,6 +412,14 @@ mod tests {
         }
     }
 
+    fn assert_statements_print_expected(source: &str, expected: &str) {
+        let (printed, result) = run(&source);
+        match result {
+            InterpretResult::InterpretOk => assert_eq!(format!("{expected}\n"), printed),
+            _ => assert!(false),
+        }
+    }
+
     #[test]
     fn test_load() {
         assert_expression_prints_expected("1", "1");
@@ -386,5 +441,16 @@ mod tests {
     #[test]
     fn test_string_equality() {
         assert_expression_prints_expected(r#" "abc" == "abc" "#, "true");
+    }
+
+    #[test]
+    fn test_globals_storing_loading() {
+        let source = r#"var breakfast = "beignets";
+        var beverage = "cafe au lait";
+        breakfast = "beignets with " + beverage;
+
+        print breakfast;"#;
+
+        assert_statements_print_expected(source, "beignets with cafe au lait");
     }
 }
