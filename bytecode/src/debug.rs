@@ -84,6 +84,9 @@ impl Disassembler {
                 | OpCode::GetGlobalLong
                 | OpCode::SetGlobalLong),
             ) => self.constant_long_instruction(&op.dis_string(), chunk, offset, obj_heap, writer),
+            Ok(op @ (OpCode::GetLocal | OpCode::SetLocal)) => {
+                self.byte_instruction(&op.dis_string(), chunk, offset, writer)
+            }
             // Something else?
             Err(byte) => {
                 writeln!(writer, "Unknown op code {byte}").unwrap();
@@ -133,6 +136,18 @@ impl Disassembler {
     fn simple_instruction<W: Write>(&mut self, name: &str, offset: usize, writer: &mut W) -> usize {
         writeln!(writer, "{name}").unwrap();
         offset + 1
+    }
+
+    fn byte_instruction<W: Write>(
+        &self,
+        name: &str,
+        chunk: &Chunk,
+        offset: usize,
+        writer: &mut W,
+    ) -> usize {
+        let slot = chunk.byte_at_index((offset + 1) as usize);
+        writeln!(writer, "{:<14} {:4}", name, slot).unwrap();
+        offset + 2
     }
 }
 

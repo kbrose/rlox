@@ -207,6 +207,14 @@ impl<Wo: Write, We: Write> VirtualMachine<Wo, We> {
                 OpCode::Pop => {
                     stack.pop();
                 }
+                OpCode::GetLocal => {
+                    let slot = chunk.byte_at_index(post_increment(&mut ip));
+                    stack.push(stack.get(slot));
+                }
+                OpCode::SetLocal => {
+                    let slot = chunk.byte_at_index(post_increment(&mut ip));
+                    stack.set(slot, stack.peek(0));
+                }
                 OpCode::SetGlobal => {
                     let name_pointer = get_constant(&chunk, &mut ip);
 
@@ -446,11 +454,58 @@ mod tests {
     #[test]
     fn test_globals_storing_loading() {
         let source = r#"var breakfast = "beignets";
-        var beverage = "cafe au lait";
-        breakfast = "beignets with " + beverage;
+            var beverage = "cafe au lait";
+            breakfast = breakfast + " with " + beverage;
 
-        print breakfast;"#;
+            print breakfast;"#;
 
         assert_statements_print_expected(source, "beignets with cafe au lait");
+    }
+
+    #[test]
+    fn test_300_globals_storing_loading() {
+        let mut source = String::new();
+        for i in 1..=300 {
+            source.push_str(&format!("var x{i} = {i}; "));
+        }
+        source.push_str("var y = ");
+        for i in 1..=300 {
+            source.push_str(&format!("x{i} + "));
+        }
+        source.push_str("0; print y;");
+
+        // Triangular sum: n*(n-1) / 2 = 45,150
+        assert_statements_print_expected(&source, "45150");
+    }
+
+    #[test]
+    fn test_lexical_scoping() {
+        let source = r#"
+        {
+            var a = "outer";
+            {
+                var a = "inner";
+                print a;
+            }
+            print a;
+        }
+        "#;
+
+        assert_statements_print_expected(source, "inner\nouter");
+
+        let source = r#"
+        var a = "global";
+        {
+            var a = "outer";
+            {
+                var a = "inner";
+                print a;
+            }
+            print a;
+        }
+        print a;
+        "#;
+
+        assert_statements_print_expected(source, "inner\nouter\nglobal");
     }
 }

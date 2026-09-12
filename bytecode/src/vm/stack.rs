@@ -49,6 +49,14 @@ impl Stack {
     pub(super) fn stack(&self) -> &Vec<Value> {
         &self.stack
     }
+
+    pub(crate) fn get(&self, slot: u8) -> Value {
+        self.stack[slot as usize]
+    }
+
+    pub(crate) fn set(&mut self, slot: u8, value: Value) {
+        self.stack[slot as usize] = value;
+    }
 }
 
 // Below is a more direct implementation of the book's version of the stack using just
