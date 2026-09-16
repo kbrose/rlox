@@ -28,6 +28,9 @@ pub(crate) enum OpCode {
     GetGlobalLong,
     SetLocal,
     GetLocal,
+    JumpIfFalse,
+    Jump,
+    Loop,
     Return,
 }
 
@@ -83,6 +86,9 @@ impl OpCode {
             Self::SetGlobalLong => "SET_GLOBAL_LONG",
             Self::SetLocal => "SET_LOCAL",
             Self::GetLocal => "GET_LOCAL",
+            Self::JumpIfFalse => "JUMP_IF_FALSE",
+            Self::Jump => "JUMP",
+            Self::Loop => "LOOP",
         }
         .to_string()
     }

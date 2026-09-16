@@ -343,6 +343,20 @@ impl<Wo: Write, We: Write> VirtualMachine<Wo, We> {
                     value.print(&self.heap, &mut self.writer);
                     writeln!(self.writer, "").expect("Error printing.");
                 }
+                OpCode::JumpIfFalse => {
+                    let offset = get_short_integer(&chunk, &mut ip);
+                    if stack.peek(0).is_falsey_raw() {
+                        ip += offset;
+                    }
+                }
+                OpCode::Jump => {
+                    let offset = get_short_integer(&chunk, &mut ip);
+                    ip += offset;
+                }
+                OpCode::Loop => {
+                    let offset = get_short_integer(&chunk, &mut ip);
+                    ip -= offset
+                }
                 OpCode::Return => {
                     // #[allow(unused)]
                     // let out = stack.pop();
@@ -384,6 +398,13 @@ fn get_constant_long(chunk: &Chunk, ip: &mut usize) -> Value {
 
     let constant = unsafe { chunk.constant_at_index_unchecked(constant_idx) };
     *constant
+}
+
+fn get_short_integer(chunk: &Chunk, ip: &mut usize) -> usize {
+    let offset = ((chunk.byte_at_index(post_increment(ip)) as usize) << 8)
+        | (chunk.byte_at_index(post_increment(ip)) as usize);
+
+    offset
 }
 
 /// An implementation of C's `x++`
@@ -507,5 +528,43 @@ mod tests {
         "#;
 
         assert_statements_print_expected(source, "inner\nouter\nglobal");
+    }
+
+    #[test]
+    fn test_if_else() {
+        assert_statements_print_expected(r#" var x = 0; if (x == 0) print x; "#, "0");
+        assert_statements_print_expected(r#" var x = 0; if (x == 0) {print x;} "#, "0");
+        assert_statements_print_expected(
+            r#" if (true) {print "then";} else {print "else";} "#,
+            "then",
+        );
+        assert_statements_print_expected(
+            r#" if (false) {print "then";} else {print "else";} "#,
+            "else",
+        );
+    }
+
+    #[test]
+    fn test_logical_operators() {
+        assert_statements_print_expected(
+            r#" var x = 0; var y = nil; print x and y; print x or y; "#,
+            "Nil\n0",
+        );
+        assert_statements_print_expected(
+            r#" if (true or false) {print "then";} else {print "else";} "#,
+            "then",
+        );
+        assert_statements_print_expected(
+            r#" if (true and false) {print "then";} else {print "else";} "#,
+            "else",
+        );
+    }
+
+    #[test]
+    fn test_while() {
+        assert_statements_print_expected(
+            r#" var x = 0; while (x < 5) {print x; x = x + 1;} "#,
+            "0\n1\n2\n3\n4",
+        );
     }
 }

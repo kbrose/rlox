@@ -87,6 +87,9 @@ impl Disassembler {
             Ok(op @ (OpCode::GetLocal | OpCode::SetLocal)) => {
                 self.byte_instruction(&op.dis_string(), chunk, offset, writer)
             }
+            Ok(op @ (OpCode::JumpIfFalse | OpCode::Jump | OpCode::Loop)) => {
+                self.jump_instruction(&op.dis_string(), 1, chunk, offset, writer)
+            }
             // Something else?
             Err(byte) => {
                 writeln!(writer, "Unknown op code {byte}").unwrap();
@@ -94,6 +97,29 @@ impl Disassembler {
             }
         };
         (offset, line)
+    }
+
+    fn jump_instruction<W: Write>(
+        &mut self,
+        name: &str,
+        sign: i64,
+        chunk: &Chunk,
+        offset: usize,
+        writer: &mut W,
+    ) -> usize {
+        let jump = ((chunk.byte_at_index(offset + 1) as i64) << 8)
+            | (chunk.byte_at_index(offset + 2) as i64);
+
+        writeln!(
+            writer,
+            "{:<14} {:4} -> {}",
+            name,
+            offset,
+            (offset as i64) + 3 + sign * jump
+        )
+        .unwrap();
+
+        offset + 3
     }
 
     fn constant_instruction<W: Write>(
