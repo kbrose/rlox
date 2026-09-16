@@ -87,9 +87,13 @@ impl Disassembler {
             Ok(op @ (OpCode::GetLocal | OpCode::SetLocal)) => {
                 self.byte_instruction(&op.dis_string(), chunk, offset, writer)
             }
-            Ok(op @ (OpCode::JumpIfFalse | OpCode::Jump | OpCode::Loop)) => {
-                self.jump_instruction(&op.dis_string(), 1, chunk, offset, writer)
-            }
+            Ok(op @ (OpCode::JumpIfFalse | OpCode::Jump | OpCode::Loop)) => self.jump_instruction(
+                &op.dis_string(),
+                if op == OpCode::Loop { -1 } else { 1 },
+                chunk,
+                offset,
+                writer,
+            ),
             // Something else?
             Err(byte) => {
                 writeln!(writer, "Unknown op code {byte}").unwrap();
