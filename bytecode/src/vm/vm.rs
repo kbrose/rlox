@@ -264,6 +264,10 @@ impl<Wo: Write, We: Write> VirtualMachine<Wo, We> {
                     let b = stack.pop();
                     stack.apply_to_top(|a| a.is_equal(&b, &self.heap));
                 }
+                OpCode::NotEqualInplace => {
+                    let a = stack.peek(1);
+                    stack.apply_to_top(|b| b.is_not_equal(&a, &self.heap));
+                }
                 OpCode::Greater => {
                     // TODO: Refactor into this vm function returning a Result<> and updating
                     // the binary_op methods to also use the runtime_error() and return a result
@@ -573,6 +577,98 @@ mod tests {
         assert_statements_print_expected(
             r#" for (var x = 0; x < 5; x = x + 1) {print x;} "#,
             "0\n1\n2\n3\n4",
+        );
+    }
+
+    #[test]
+    fn test_switch() {
+        assert_statements_print_expected(
+            r#"
+            var x = 0;
+
+            switch (x) {
+              case 0: print "case 0";
+              case 1: print "case 1";
+            }
+            "#,
+            "case 0",
+        );
+
+        assert_statements_print_expected(
+            r#"
+            var x = 1;
+
+            switch (x) {
+              case 0: print "case 0";
+              case 1: print "case 1";
+            }
+            "#,
+            "case 1",
+        );
+
+        assert_statements_print_expected(
+            r#"
+            var x = 1;
+
+            switch (x) {
+                case 0: print "case 0";
+                case 1: print "case 1";
+                default: print "default";
+            }
+
+            print x;
+            "#,
+            "case 1\n1",
+        );
+
+        assert_statements_print_expected(
+            r#"
+            var x = "other";
+
+            switch (x) {
+              case 0: print "case 0";
+              case 1: print "case 1";
+              default: print "default";
+            }
+
+            print x;
+            "#,
+            "default\nother",
+        );
+
+        assert_statements_print_expected(
+            r#"
+            var x = 0;
+
+            while (x < 5) {
+                switch (x) {
+                    case 0: print "case 0";
+                    case 1: print "case 1";
+                    default: print "default";
+                }
+                x = x + 1;
+            }
+
+            print x;
+            "#,
+            "case 0\ncase 1\ndefault\ndefault\ndefault\n5",
+        );
+
+        assert_statements_print_expected(
+            r#"
+            var x = 0;
+
+            while (x < 5) {
+                switch (x) {
+                    case 0: print "case 0";
+                    case 3: print "case 3";
+                }
+                x = x + 1;
+            }
+
+            print x;
+            "#,
+            "case 0\ncase 3\n5",
         );
     }
 }

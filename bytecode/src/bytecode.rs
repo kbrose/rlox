@@ -31,6 +31,7 @@ pub(crate) enum OpCode {
     JumpIfFalse,
     Jump,
     Loop,
+    NotEqualInplace,
     Return,
 }
 
@@ -89,6 +90,7 @@ impl OpCode {
             Self::JumpIfFalse => "JUMP_IF_FALSE",
             Self::Jump => "JUMP",
             Self::Loop => "LOOP",
+            Self::NotEqualInplace => "N_EQUAL_INP",
         }
         .to_string()
     }

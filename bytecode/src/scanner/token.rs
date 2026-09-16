@@ -50,6 +50,12 @@ pub(crate) enum TokenType {
 
     // End of file
     Eof,
+
+    // Challenge 23.1
+    Switch,
+    Case,
+    Default,
+    Colon,
 }
 
 impl TokenType {

@@ -72,6 +72,10 @@ impl Value {
         Self::Bool(self.is_equal_raw(other, heap))
     }
 
+    pub(crate) fn is_not_equal(&self, other: &Value, heap: &Heap) -> Value {
+        Self::Bool(self.is_equal_raw(other, heap))
+    }
+
     pub(crate) fn is_equal_raw(&self, other: &Value, heap: &Heap) -> bool {
         match (self, other) {
             (Self::Nil, Self::Nil) => true,

@@ -90,6 +90,7 @@ impl<'a, W: Write> Compiler<'a, W> {
         };
     }
 
+    /// Check if the current token is of the specified type.
     fn check(&self, token_type: TokenType) -> bool {
         self.current.token_type() == token_type
     }
@@ -102,6 +103,8 @@ impl<'a, W: Write> Compiler<'a, W> {
         }
     }
 
+    /// Check if the current token is of the specified type. If so,
+    /// advance to the next token.
     fn matches(&mut self, token_type: TokenType) -> bool {
         if self.check(token_type) {
             self.advance();
@@ -243,6 +246,8 @@ impl<'a, W: Write> Compiler<'a, W> {
             self.while_statement();
         } else if self.matches(TokenType::For) {
             self.for_statement();
+        } else if self.matches(TokenType::Switch) {
+            self.switch_statement();
         } else if self.matches(TokenType::LeftBrace) {
             self.begin_scope();
             self.block();
@@ -304,6 +309,60 @@ impl<'a, W: Write> Compiler<'a, W> {
         self.expression();
         self.consume(TokenType::Semicolon, "Expect ';' after expression.");
         self.emit_op(OpCode::Pop);
+    }
+
+    fn switch_statement(&mut self) {
+        self.consume(TokenType::LeftParen, "Expect '(' after 'switch'.");
+        self.expression();
+        self.consume(TokenType::RightParen, "Expect ')' after clause.");
+        self.consume(TokenType::LeftBrace, "Expect '{' after switch clause");
+
+        let mut maybe_prev_jump = None;
+        let mut exit_jumps = Vec::new();
+        while !self.matches(TokenType::RightBrace) && !self.check(TokenType::Eof) {
+            if let Some(prev_jump) = maybe_prev_jump {
+                self.patch_jump(prev_jump);
+                self.emit_op(OpCode::Pop); // Pop the PREVIOUS case expression
+            }
+
+            if self.matches(TokenType::Case) {
+                self.expression();
+                self.consume(TokenType::Colon, "Expect ':' after case expression.");
+
+                self.emit_op(OpCode::NotEqualInplace);
+                maybe_prev_jump = Some(self.emit_jump(OpCode::JumpIfFalse));
+                self.emit_op(OpCode::Pop); // Pop the case expression
+                self.statement();
+                exit_jumps.push(self.emit_jump(OpCode::Jump));
+            } else if self.matches(TokenType::Default) {
+                maybe_prev_jump = None;
+
+                self.consume(TokenType::Colon, "Expect ':' after 'default'.");
+
+                self.statement();
+
+                self.consume(
+                    TokenType::RightBrace,
+                    "Expect '}' after default statements.",
+                );
+                // No need to update exit jumps, this is always the last.
+                break;
+            } else {
+                self.error("Expected 'case' or 'default' in switch statement.");
+                return;
+            }
+        }
+
+        if let Some(prev_jump) = maybe_prev_jump {
+            self.patch_jump(prev_jump);
+            self.emit_op(OpCode::Pop); // Pop the PREVIOUS case expression
+        }
+
+        for exit_jump in exit_jumps {
+            self.patch_jump(exit_jump);
+        }
+
+        self.emit_op(OpCode::Pop); // Pop the switch condition expression
     }
 
     fn for_statement(&mut self) {
@@ -802,6 +861,10 @@ impl<'a, W: Write> ParseRule<'a, W> {
             TokenType::Var          => ParseRule::new(None,                     None                                             ),
             TokenType::While        => ParseRule::new(None,                     None                                             ),
             TokenType::Eof          => ParseRule::new(None,                     None                                             ),
+            TokenType::Switch       => ParseRule::new(None,                     None                                             ),
+            TokenType::Case         => ParseRule::new(None,                     None                                             ),
+            TokenType::Default      => ParseRule::new(None,                     None                                             ),
+            TokenType::Colon        => ParseRule::new(None,                     None                                             ),
         }
     }
 }

@@ -69,7 +69,8 @@ impl Disassembler {
                 | OpCode::Greater
                 | OpCode::Less
                 | OpCode::Print
-                | OpCode::Pop),
+                | OpCode::Pop
+                | OpCode::NotEqualInplace),
             ) => self.simple_instruction(&op.dis_string(), offset, writer),
             // Constant loading instructions
             Ok(

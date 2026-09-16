@@ -213,6 +213,13 @@ impl StateMachine {
                 )),
                 StateMachine::Root,
             )),
+            ':' => Ok((
+                Some(TokenType::Colon.to_token(
+                    process_input.line,
+                    &process_input.source[process_input.char_start..process_input.char_end],
+                )),
+                StateMachine::Root,
+            )),
             '*' => Ok((
                 Some(TokenType::Star.to_token(
                     process_input.line,
@@ -456,6 +463,9 @@ impl StateMachine {
             "true" => TokenType::True,
             "var" => TokenType::Var,
             "while" => TokenType::While,
+            "switch" => TokenType::Switch,
+            "case" => TokenType::Case,
+            "default" => TokenType::Default,
             _ => TokenType::Identifier,
         }
     }
