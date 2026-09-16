@@ -567,4 +567,12 @@ mod tests {
             "0\n1\n2\n3\n4",
         );
     }
+
+    #[test]
+    fn test_for() {
+        assert_statements_print_expected(
+            r#" for (var x = 0; x < 5; x = x + 1) {print x;} "#,
+            "0\n1\n2\n3\n4",
+        );
+    }
 }
